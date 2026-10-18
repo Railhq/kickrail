@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f3f1ea;
+  --surface: #fffdf8;
+  --sunk: #ebe8df;
+  --fg: #16150f;
+  --muted: #6d6a5f;
+  --line: #e2ded2;
+  --brand: #0f5e4b;
+  --brand-fg: #ffffff;
+  --ink: #14140f;
+  --ink-2: #1f1f19;
+  --ink-line: #2d2d25;
+  --ink-muted: #9b998c;
+  --signal: #d7f75b;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-sunk: var(--sunk);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-brand: var(--brand);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-line: var(--ink-line);
+  --color-ink-muted: var(--ink-muted);
+  --color-signal: var(--signal);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-instrument), Georgia, serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--ink);
+}
+
+::selection {
+  background: var(--signal);
+  color: var(--ink);
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-surface p-5;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none transition placeholder:text-stone-400 focus:border-fg focus:ring-4 focus:ring-signal/50;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-primary {
+    @apply bg-ink text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] hover:bg-ink-2;
+  }
+  .btn-signal {
+    @apply bg-signal text-ink hover:brightness-95;
+  }
+  .btn-secondary {
+    @apply border border-line bg-surface hover:border-stone-300 hover:bg-white;
+  }
+  .btn-danger {
+    @apply border border-red-200 bg-surface text-red-700 hover:bg-red-50;
+  }
+  .link {
+    @apply font-medium text-brand underline decoration-brand/30 underline-offset-[3px] hover:decoration-brand;
+  }
+  .page-title {
+    @apply font-display text-[2.5rem] leading-none tracking-tight;
+  }
+  .eyebrow {
+    @apply font-mono text-[11px] uppercase tracking-[0.12em] text-muted;
+  }
+  .num {
+    @apply font-mono tabular-nums tracking-tight;
+  }
+}

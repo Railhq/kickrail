@@ -1,0 +1,21 @@
+.DS_Store
+*.pem
+
+# env files: only the examples are committed
+.env*
+!.env.example
+
+# web
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+
+# backend
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

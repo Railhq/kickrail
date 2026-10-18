@@ -1,0 +1,28 @@
+#cloud-config
+# Ubuntu 24.04 droplet for the portal proxy. Don't use this file directly:
+# render.py fills in the Caddyfile and the proxy token (which must equal
+# PORTAL_PROXY_TOKEN on the web service).
+package_update: true
+packages: [debian-keyring, debian-archive-keyring, apt-transport-https, curl, gpg, unattended-upgrades]
+write_files:
+  - path: /etc/caddy/env
+    permissions: "0600"
+    content: |
+      PROXY_SITE=portals.kickrail.com
+      ASK_URL=https://kickrail.com/api/tls/ask
+      UPSTREAM=https://kickrail.com
+      UPSTREAM_HOST=kickrail.com
+      PORTAL_PROXY_TOKEN=__PORTAL_PROXY_TOKEN__
+  - path: /etc/caddy/Caddyfile.kickrail
+    content: |
+__CADDYFILE__
+  - path: /etc/systemd/system/caddy.service.d/env.conf
+    content: |
+      [Service]
+      EnvironmentFile=/etc/caddy/env
+runcmd:
+  - curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  - curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o /etc/apt/sources.list.d/caddy-stable.list
+  - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y caddy
+  - mv /etc/caddy/Caddyfile.kickrail /etc/caddy/Caddyfile
+  - systemctl daemon-reload && systemctl enable caddy && systemctl restart caddy

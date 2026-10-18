@@ -1,0 +1,39 @@
+# Kickrail portal proxy. Merchants CNAME their portal hostname (partners.example.com)
+# to {$PROXY_SITE}. Caddy gets a certificate the first time a hostname is visited,
+# but only after the app says it is a verified portal domain (on_demand_tls ask),
+# then forwards to the app as {$UPSTREAM_HOST}. The app's middleware trusts the
+# x-kickrail-* headers only when the proxy token matches.
+{
+	on_demand_tls {
+		ask {$ASK_URL}
+	}
+	servers {
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+	}
+}
+
+{$PROXY_SITE} {
+	respond "Kickrail portal proxy. Point a CNAME here from your portal domain." 200
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	# The app's CDN caches the prerendered home page under kickrail.com and would serve
+	# it here; /join is dynamic and the middleware maps it to this merchant's join page.
+	rewrite / /join?{query}
+	reverse_proxy {$UPSTREAM} {
+		header_up Host {$UPSTREAM_HOST}
+		header_up X-Kickrail-Portal-Host {hostport}
+		header_up X-Kickrail-Client-Ip {remote_host}
+		header_up X-Kickrail-Proxy-Token {$PORTAL_PROXY_TOKEN}
+	}
+}
+
+http:// {
+	redir https://{host}{uri} 308
+}

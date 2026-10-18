@@ -1,0 +1,146 @@
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+
+os.environ.update(
+    KR_MONGODB_URI="mongodb://127.0.0.1:27017",
+    KR_MONGODB_DB=f"kickrail_test_{secrets.token_hex(4)}",
+    KR_APP_SECRET="test-secret-" + "x" * 40,
+    KR_INTERNAL_TOKEN="internal-test",
+    KR_PUBLIC_URL="https://kickrail.test",
+    KR_PLATFORM_STRIPE_WEBHOOK_SECRET="whsec_platform",
+    KR_PLATFORM_STRIPE_SECRET_KEY="",
+    KR_DEV_WEBHOOK_SECRET="",
+    KR_DISPATCHER="false",
+    # Never inherit the real mail setup from .env.
+    KR_BREVO_API_KEY="",
+    KR_SMTP_HOST="",
+    KR_MAIL_FROM="Kickrail <noreply@kickrail.test>",
+    KR_MAIL_VIA=" via Kickrail",
+)
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+
+from app import deps  # noqa: E402
+from app.db import close_db, get_db  # noqa: E402
+from app.main import app  # noqa: E402
+
+
+class FakeMerchantStripe:
+    """Stands in for a merchant's Stripe account."""
+
+    def __init__(self):
+        self.promotion_codes: list[tuple[str, str]] = []
+        self.invoice_pi: dict[str, str] = {}
+        self.webhooks_deleted: list[str] = []
+        self.customer_times: dict = {}
+
+    async def account(self):
+        return {"id": "acct_merchant", "name": "Acme"}
+
+    async def create_webhook(self, url):
+        self.webhook_url = url
+        return "we_1", "whsec_merchant"
+
+    async def delete_webhook(self, endpoint_id):
+        self.webhooks_deleted.append(endpoint_id)
+
+    async def customer_created(self, customer_id):
+        return self.customer_times.get(customer_id)
+
+    async def payment_intent_for_invoice(self, invoice_id):
+        return self.invoice_pi.get(invoice_id)
+
+    async def invoice_for_payment_intent(self, pi):
+        return next((i for i, p in self.invoice_pi.items() if p == pi), None)
+
+    async def create_promotion_code(self, coupon_id, code, affiliate_id):
+        self.promotion_codes.append((coupon_id, code))
+        return f"promo_{code}"
+
+    async def list_coupons(self):
+        return [{"id": "coupon_20", "name": "20% off", "percent_off": 20, "amount_off": None, "currency": None}]
+
+
+class FakePlatform:
+    def __init__(self):
+        self.transfers: list[dict] = []
+        self.enabled: set[str] = set()
+        self.fail_for: set[str] = set()
+        self.n = 0
+
+    async def create_express_account(self, email, user_id, country):
+        self.n += 1
+        return f"acct_aff{self.n}"
+
+    async def onboarding_link(self, account_id, refresh_url, return_url):
+        return f"https://connect.stripe.test/{account_id}"
+
+    async def dashboard_link(self, account_id):
+        return f"https://dashboard.stripe.test/{account_id}"
+
+    async def payout_status(self, account_id):
+        return "ready" if account_id in self.enabled else "needs_info"
+
+    async def funding_checkout(self, payout_id, amount_cents, currency, description, success_url, cancel_url):
+        self.funding = (payout_id, amount_cents, currency)
+        return f"cs_fund_{payout_id}", "https://checkout.stripe.test/fund"
+
+    async def charge_for_session(self, session_id):
+        return "ch_funding"
+
+    async def transfer(self, amount_cents, currency, destination, source_charge, group, idempotency_key):
+        if destination in self.fail_for:
+            raise RuntimeError("account restricted")
+        self.transfers.append({"amount": amount_cents, "currency": currency, "destination": destination, "source": source_charge, "key": idempotency_key})
+        return f"tr_{len(self.transfers)}"
+
+
+@pytest.fixture(scope="session")
+def fakes():
+    return {"merchant": FakeMerchantStripe(), "platform": FakePlatform()}
+
+
+@pytest.fixture(scope="session", autouse=True)
+async def setup_app(fakes):
+    app.dependency_overrides[deps.merchant_api_factory] = lambda: (lambda m: fakes["merchant"])
+    app.dependency_overrides[deps.merchant_key_client] = lambda: (lambda key: fakes["merchant"])
+    app.dependency_overrides[deps.platform_api] = lambda: fakes["platform"]
+    # merchant.create_payout calls platform_api() directly (not as a dependency)
+    import app.routers.merchant as mr
+
+    mr.platform_api = lambda: fakes["platform"]
+    import app.routers.webhooks as wh
+
+    wh.platform_api = lambda: fakes["platform"]
+    db = await get_db()
+    yield
+    await db.client.drop_database(db.name)
+    await close_db()
+
+
+@pytest.fixture(scope="session")
+async def client():
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://backend", headers={"x-internal-token": "internal-test"}) as c:
+        yield c
+
+
+@pytest.fixture(scope="session")
+async def db():
+    return await get_db()
+
+
+def sign(payload: str, secret: str) -> str:
+    t = int(time.time())
+    sig = hmac.new(secret.encode(), f"{t}.{payload}".encode(), hashlib.sha256).hexdigest()
+    return f"t={t},v1={sig}"
+
+
+async def send_event(client, url: str, secret: str, type_: str, obj: dict, event_id: str | None = None):
+    event = {"id": event_id or f"evt_{secrets.token_hex(6)}", "type": type_, "data": {"object": obj}}
+    payload = json.dumps(event)
+    return await client.post(url, content=payload, headers={"stripe-signature": sign(payload, secret), "content-type": "application/json"})
