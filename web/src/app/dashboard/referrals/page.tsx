@@ -46,6 +46,7 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
                     <StatusBadge status={r.status} />
                     {open && <span className="ml-1"><Badge tone="amber">held</Badge></span>}
                     {r.rejected && <span className="ml-1"><Badge tone="red">rejected</Badge></span>}
+                    {r.test && <span className="ml-1" title="Came through a test link, so it isn't counted and earns nothing"><Badge>test</Badge></span>}
                   </td>
                   <td className="px-5 py-3 text-muted">{SOURCE[r.source] ?? r.source}</td>
                   <td className="px-5 py-3 text-muted">{date(r.created_at)}</td>

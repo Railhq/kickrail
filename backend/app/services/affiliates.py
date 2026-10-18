@@ -218,7 +218,7 @@ async def affiliate_view(db: AsyncDatabase, m: dict, aff: dict, user: dict) -> d
 
 
 async def pipeline(db, aff: dict) -> dict:
-    refs = await db.referrals.find({"affiliate_id": aff["_id"]}).to_list(None)
+    refs = await db.referrals.find({"affiliate_id": aff["_id"], "test": {"$ne": True}}).to_list(None)
     commissions = await db.commissions.find({"affiliate_id": aff["_id"]}).sort("created_at", -1).to_list(None)
     now = datetime.now(UTC)
     totals: dict[str, dict[str, int]] = {}

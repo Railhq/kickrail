@@ -142,6 +142,8 @@ async def earn(
         await db.referrals.update_one({"_id": referral["_id"]}, {"$set": {"first_paid_at": paid_at, "status": "customer"}})
         await notify.referral_converted(db, merchant["_id"], {**referral, "first_paid_at": paid_at, "status": "customer"})
 
+    if referral.get("test"):
+        return "no commission: test referral"
     # Lead bounties are paid for the signup, so they don't use up a one-time sale commission.
     prior = await db.commissions.count_documents({"referral_id": referral["_id"], "status": {"$ne": "void"}, "amount_cents": {"$gt": 0}, "kind": {"$ne": "lead"}})
     d = decide_commission(campaign, base_cents, currency, paid_at, first_paid_at, prior, affiliate, lines)

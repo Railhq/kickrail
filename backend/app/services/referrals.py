@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 
-from ..domain.fraud import self_referral_flags
+from ..domain.fraud import canonical_email, self_referral_flags
 from ..ids import new_id
 from . import notify
 
@@ -121,6 +121,15 @@ async def _older_customer(db: AsyncDatabase, referral: dict, customer_id: str, c
     return True
 
 
+async def _is_team_email(db: AsyncDatabase, merchant: dict, email: str) -> bool:
+    ids = list({merchant.get("owner_id"), *(merchant.get("member_ids") or [])} - {None})
+    target = canonical_email(email)
+    async for u in db.users.find({"_id": {"$in": ids}}, {"email": 1}):
+        if u.get("email") and canonical_email(u["email"]) == target:
+            return True
+    return False
+
+
 async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, customer_created=None) -> tuple[dict, bool] | None:
     """Returns (referral, created) or None when nothing points at an approved affiliate.
     `customer_created(customer_id)` gives a Stripe customer's creation time, for the
@@ -146,6 +155,10 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
     if not hit:
         return None
     affiliate, source, click_id = hit
+    # The program's own team signing up to their own product is never a referral.
+    if email and await _is_team_email(db, merchant, email):
+        return None
+    click = await db.clicks.find_one({"_id": click_id}, {"test": 1}) if click_id else None
     aff_user = await db.users.find_one({"_id": affiliate["user_id"]})
     flags = self_referral_flags(aff_user["email"], aff_user.get("ip_hashes", []), email, inp.ip_hash) if aff_user else []
     referral = {
@@ -162,6 +175,8 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
         "first_paid_at": None,
         "flags": flags,
         "auto": inp.auto or None,
+        # Came through a kr_test=1 link: shown to the merchant, left out of counts and commissions.
+        "test": True if click and click.get("test") else None,
         "created_at": datetime.now(UTC),
     }
     # Sparse indexes skip missing fields, not nulls, so drop the empty ones.
@@ -169,7 +184,7 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
     await db.referrals.insert_one(referral)
     await notify.referral_created(db, merchant["_id"], referral)
     # A form the script picked up on its own may be a newsletter box, not a signup.
-    if not inp.auto:
+    if not inp.auto and not referral.get("test"):
         await award_lead_bounty(db, merchant, referral)
     return referral, True
 

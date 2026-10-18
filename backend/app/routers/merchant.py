@@ -634,7 +634,7 @@ async def _affiliate_stats(db, merchant_id: str, affiliate_ids: list[str]) -> di
     async for row in await db.clicks.aggregate([{"$match": {"merchant_id": merchant_id, "test": False}}, {"$group": {"_id": "$affiliate_id", "n": {"$sum": 1}}}]):
         if row["_id"] in stats:
             stats[row["_id"]]["clicks"] = row["n"]
-    async for row in await db.referrals.aggregate([{"$match": {"merchant_id": merchant_id}}, {"$group": {"_id": {"a": "$affiliate_id", "s": "$status"}, "n": {"$sum": 1}}}]):
+    async for row in await db.referrals.aggregate([{"$match": {"merchant_id": merchant_id, "test": {"$ne": True}}}, {"$group": {"_id": {"a": "$affiliate_id", "s": "$status"}, "n": {"$sum": 1}}}]):
         a = row["_id"]["a"]
         if a in stats:
             stats[a]["leads"] += row["n"]
@@ -875,9 +875,9 @@ async def overview(m=Depends(current_merchant), db=Depends(db_dep)):
         "affiliates": await db.affiliates.count_documents({"merchant_id": mid, "status": "approved"}),
         "pending_affiliates": await db.affiliates.count_documents({"merchant_id": mid, "status": "pending"}),
         "clicks": await db.clicks.count_documents({"merchant_id": mid, "test": False}),
-        "leads": await db.referrals.count_documents({"merchant_id": mid}),
-        "customers": await db.referrals.count_documents({"merchant_id": mid, "status": "customer"}),
-        "flagged": await db.referrals.count_documents({"merchant_id": mid, "flags.0": {"$exists": True}, "flags_cleared": {"$ne": True}}),
+        "leads": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}}),
+        "customers": await db.referrals.count_documents({"merchant_id": mid, "status": "customer", "test": {"$ne": True}}),
+        "flagged": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "flags.0": {"$exists": True}, "flags_cleared": {"$ne": True}}),
         "referred_revenue": revenue,
         "commissions": by_status,
         "stripe_connected": bool(m.get("stripe")),

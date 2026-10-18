@@ -133,6 +133,7 @@ export type Referral = {
   flags: { kind: string; detail: string }[];
   flags_cleared?: boolean;
   rejected?: boolean;
+  test?: boolean;
   created_at: string;
 };
 
