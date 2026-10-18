@@ -130,7 +130,7 @@ async def _is_team_email(db: AsyncDatabase, merchant: dict, email: str) -> bool:
     return False
 
 
-async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, customer_created=None) -> tuple[dict, bool] | None:
+async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, customer_created=None, _retry: bool = True) -> tuple[dict, bool] | None:
     """Returns (referral, created) or None when nothing points at an approved affiliate.
     `customer_created(customer_id)` gives a Stripe customer's creation time, for the
     auto-lead check."""
@@ -148,7 +148,11 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
         if inp.stripe_customer_id and not existing.get("stripe_customer_id"):
             fill["stripe_customer_id"] = inp.stripe_customer_id
         if fill:
-            await db.referrals.update_one({"_id": existing["_id"]}, {"$set": fill})
+            try:
+                await db.referrals.update_one({"_id": existing["_id"]}, {"$set": fill})
+            except DuplicateKeyError:
+                # Another referral already holds one of these ids; keep both as they are.
+                return existing, False
         return {**existing, **fill}, False
 
     hit = await resolve_affiliate(db, merchant["_id"], inp)
@@ -181,7 +185,13 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
     }
     # Sparse indexes skip missing fields, not nulls, so drop the empty ones.
     referral = {k: v for k, v in referral.items() if v is not None or k in ("first_paid_at",)}
-    await db.referrals.insert_one(referral)
+    try:
+        await db.referrals.insert_one(referral)
+    except DuplicateKeyError:
+        # A concurrent request (say the browser script and the merchant's server) won the race.
+        if not _retry:
+            raise
+        return await attach_referral(db, merchant, inp, customer_created, _retry=False)
     await notify.referral_created(db, merchant["_id"], referral)
     # A form the script picked up on its own may be a newsletter box, not a signup.
     if not inp.auto and not referral.get("test"):

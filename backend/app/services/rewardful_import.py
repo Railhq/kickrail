@@ -373,11 +373,21 @@ class Run:
                     **({"stripe_customer_id": cus} if cus else {}),
                 }
                 if existing:
-                    await db.referrals.update_one({"_id": existing["_id"]}, {"$set": doc})
+                    try:
+                        await db.referrals.update_one({"_id": existing["_id"]}, {"$set": doc})
+                    except DuplicateKeyError:
+                        # The email or customer belongs to another referral already: keep the rest.
+                        await db.referrals.update_one({"_id": existing["_id"]}, {"$set": {k: v for k, v in doc.items() if k not in ("email", "stripe_customer_id")}})
                     self.referrals_map[r["id"]] = existing["_id"]
                 else:
                     rid = new_id("ref")
-                    await db.referrals.insert_one({"_id": rid, "merchant_id": m["_id"], **doc, "flags": [], "created_at": _time(r.get("created_at")) or datetime.now(UTC)})
+                    try:
+                        await db.referrals.insert_one({"_id": rid, "merchant_id": m["_id"], **doc, "flags": [], "created_at": _time(r.get("created_at")) or datetime.now(UTC)})
+                    except DuplicateKeyError:
+                        # Rewardful had the same person twice: the first referral imported keeps them.
+                        same = await find_referral(db, m["_id"], email, None, cus)
+                        self.referrals_map[r["id"]] = same and same["_id"]
+                        continue
                     self.referrals_map[r["id"]] = rid
                 self.counts["referrals"] += 1
             await self.save("referrals", total)

@@ -252,3 +252,54 @@ async def test_overview_and_tenant_isolation(client):
     assert o["affiliates"] == 2 and o["customers"] == 3 and o["installed"]
     # The affiliate has no merchant workspace and can't read Acme's data
     assert (await client.get("/merchant/commissions", headers=auth(S["aff"]))).status_code == 404
+
+
+async def test_concurrent_signups_make_one_referral(db):
+    import asyncio
+
+    from app.services.referrals import AttachInput, attach_referral
+
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    hits = await asyncio.gather(*[attach_referral(db, m, AttachInput(click_id=S["click"], email="Race@Example.com", external_user_id="u_race")) for _ in range(6)])
+    assert len({h[0]["_id"] for h in hits}) == 1 and sum(h[1] for h in hits) == 1
+    assert await db.referrals.count_documents({"merchant_id": m["_id"], "email": "race@example.com"}) == 1
+
+
+async def test_stripe_events_are_recorded(client, db):
+    e = await db.stripe_events.find_one({"_id": "evt_inv1"})
+    assert e["status"] == "done" and e["deliveries"] == 2 and e["merchant_id"] == S["merchant_id"] and e["type"] == "invoice.paid"
+    assert e["outcome"].startswith("commission")
+    # A delivery that fails is recorded as failed, and the next delivery runs it again.
+    from app.routers import webhooks
+
+    real = webhooks.process_merchant_event
+
+    async def boom(*a, **k):
+        raise RuntimeError("stripe down")
+
+    webhooks.process_merchant_event = boom
+    try:
+        with pytest.raises(RuntimeError):
+            await send_event(client, hook_url(), "whsec_merchant", "customer.created", {"id": "cus_retry"}, event_id="evt_retry")
+    finally:
+        webhooks.process_merchant_event = real
+    assert (await db.stripe_events.find_one({"_id": "evt_retry"}))["error"] == "RuntimeError: stripe down"
+    r = await send_event(client, hook_url(), "whsec_merchant", "customer.created", {"id": "cus_retry"}, event_id="evt_retry")
+    assert r.json()["outcome"] != "duplicate"
+    e = await db.stripe_events.find_one({"_id": "evt_retry"})
+    assert e["status"] == "done" and e["deliveries"] == 2 and "error" not in e
+
+
+async def test_money_actions_are_audited(client, db):
+    rows = (await client.get("/merchant/audit", headers=auth(S["owner"]))).json()
+    by = {(r["action"], r["target"]): r for r in rows}
+    p = by[("payout.created", S["manual_payout"])]
+    assert p["actor"]["kind"] == "user" and p["actor"]["email"] and p["detail"]["method"] == "manual" and p["detail"]["total_cents"] > 0
+    assert by[("referral.flags_cleared", S["self_ref"])]["detail"]["commissions_released"] >= 1
+    # Rejecting an affiliate and the API key acting are recorded too, with who did it.
+    await client.patch(f"/merchant/affiliates/{S['aff_id']}", json={"status": "rejected"}, headers=auth(S["owner"]))
+    await client.patch(f"/merchant/affiliates/{S['aff_id']}", json={"status": "approved"}, headers=auth(S["owner"]))
+    rows = (await client.get(f"/merchant/audit?target={S['aff_id']}", headers=auth(S["owner"]))).json()
+    assert [r["action"] for r in rows][:2] == ["affiliate.approved", "affiliate.rejected"] and rows[0]["detail"]["previous"] == "rejected"
+    # Affiliates can't read the program's log.
+    assert (await client.get("/merchant/audit", headers=auth(S["aff"]))).status_code == 404

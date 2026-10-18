@@ -1,5 +1,7 @@
 import json
 import logging
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -29,6 +31,30 @@ def _verify(payload: bytes, signature: str, secrets: list[str]) -> dict:
     raise HTTPException(400, "bad signature")
 
 
+async def _once(db, endpoint: str, event: dict, merchant_id: str | None, handle: Callable[[], Awaitable[str]]) -> str:
+    """Record the event and run `handle` unless an earlier delivery already finished it.
+    Handlers stay idempotent on their own: this only saves repeat work and keeps a history."""
+    now = datetime.now(UTC)
+    prev = await db.stripe_events.find_one_and_update(
+        {"_id": event["id"]},
+        {
+            "$setOnInsert": {"endpoint": endpoint, "type": event.get("type"), "account": event.get("account"), "livemode": event.get("livemode"), "created": event.get("created"), "received_at": now},
+            "$set": {"last_received_at": now},
+            "$inc": {"deliveries": 1},
+        },
+        upsert=True,
+    )
+    if prev and prev.get("status") == "done":
+        return "duplicate"
+    try:
+        outcome = await handle()
+    except Exception as e:
+        await db.stripe_events.update_one({"_id": event["id"]}, {"$set": {"status": "failed", "error": f"{type(e).__name__}: {e}"[:500], "merchant_id": merchant_id}})
+        raise
+    await db.stripe_events.update_one({"_id": event["id"]}, {"$set": {"status": "done", "outcome": outcome, "merchant_id": merchant_id, "done_at": datetime.now(UTC)}, "$unset": {"error": ""}})
+    return outcome
+
+
 @router.post("/stripe/{merchant_id}")
 async def merchant_webhook(merchant_id: str, request: Request, db=Depends(db_dep), factory=Depends(merchant_api_factory)):
     m = await db.merchants.find_one({"_id": merchant_id})
@@ -36,7 +62,7 @@ async def merchant_webhook(merchant_id: str, request: Request, db=Depends(db_dep
         raise HTTPException(404, "unknown merchant")
     event = _verify(await request.body(), request.headers.get("stripe-signature", ""), [decrypt(m["stripe"]["webhook_secret_enc"])])
     # Errors propagate as 500 so Stripe retries; processing is idempotent.
-    outcome = await process_merchant_event(db, m, event, factory(m))
+    outcome = await _once(db, "merchant", event, merchant_id, lambda: process_merchant_event(db, m, event, factory(m)))
     log.info("merchant %s %s %s -> %s", merchant_id, event["type"], event["id"], outcome)
     return {"outcome": outcome}
 
@@ -48,20 +74,24 @@ async def platform_webhook(request: Request, db=Depends(db_dep), factory=Depends
     obj = event["data"]["object"]
     # Merchants who connected with one click send their events through Kickrail's Connect endpoint.
     m = await db.merchants.find_one({"stripe.account_id": event["account"], "stripe.oauth": True}) if event.get("account") else None
-    if m and event["type"] == "account.application.deauthorized":
-        await db.merchants.update_one({"_id": m["_id"], "stripe.account_id": event["account"]}, {"$unset": {"stripe": ""}})
-        outcome = "merchant disconnected"
-    elif m:
-        outcome = await process_merchant_event(db, m, event, factory(m))
-    elif event["type"] == "checkout.session.completed" and (obj.get("metadata") or {}).get("kr_payout"):
-        outcome = await complete_funded_payout(db, obj["metadata"]["kr_payout"], obj["id"], platform_api())
-    elif (handled := await billing.handle_event(db, event)) is not None:
-        outcome = handled
-    elif event["type"] == "account.updated":
-        enabled = bool(obj.get("payouts_enabled")) and (obj.get("capabilities") or {}).get("transfers") == "active"
-        res = await db.users.update_one({"connect_account_id": obj["id"]}, {"$set": {"payouts_enabled": enabled}})
-        outcome = f"payouts_enabled={enabled}" if res.matched_count else "unknown account"
-    else:
-        outcome = "ignored"
+
+    async def handle() -> str:
+        if m and event["type"] == "account.application.deauthorized":
+            await db.merchants.update_one({"_id": m["_id"], "stripe.account_id": event["account"]}, {"$unset": {"stripe": ""}})
+            return "merchant disconnected"
+        elif m:
+            return await process_merchant_event(db, m, event, factory(m))
+        elif event["type"] == "checkout.session.completed" and (obj.get("metadata") or {}).get("kr_payout"):
+            return await complete_funded_payout(db, obj["metadata"]["kr_payout"], obj["id"], platform_api())
+        elif (handled := await billing.handle_event(db, event)) is not None:
+            return handled
+        elif event["type"] == "account.updated":
+            enabled = bool(obj.get("payouts_enabled")) and (obj.get("capabilities") or {}).get("transfers") == "active"
+            res = await db.users.update_one({"connect_account_id": obj["id"]}, {"$set": {"payouts_enabled": enabled}})
+            return f"payouts_enabled={enabled}" if res.matched_count else "unknown account"
+        else:
+            return "ignored"
+
+    outcome = await _once(db, "platform", event, m["_id"] if m else None, handle)
     log.info("platform %s %s -> %s", event["type"], event["id"], outcome)
     return {"outcome": outcome}

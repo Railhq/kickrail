@@ -21,7 +21,7 @@ from ..domain.commission import describe_rate, describe_rule
 from ..ids import new_id, random_id, sha256, slugify
 from ..security import MAX_PROGRAMS, can_be_paid, current_merchant, current_user, db_dep
 from ..serializers import affiliate_url, code_obj, join_url, link_obj, portal_base
-from ..services import notify
+from ..services import audit, notify
 from ..services import payouts as payout_svc
 from ..services import rewardful_import
 from ..services.exports import EXPORTS
@@ -398,6 +398,7 @@ async def connect_stripe(body: StripeConnectIn, m=Depends(current_merchant), db=
         "connected_at": datetime.now(UTC),
     }
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"stripe": stripe}})
+    await audit.record(db, m["_id"], "stripe.connected", m["_id"], account_id=stripe.get("account_id"), livemode=stripe.get("livemode"))
     return merchant_out({**m, "stripe": stripe})
 
 
@@ -450,6 +451,8 @@ async def stripe_oauth_finish(body: StripeOAuthIn, user=Depends(current_user), d
     await _drop_old_webhook(m, factory)
     stripe = {"oauth": True, "account_id": acct["id"], "account_name": acct["name"], "livemode": tok["livemode"], "connected_at": datetime.now(UTC)}
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"stripe": stripe}})
+    audit.as_user(user)
+    await audit.record(db, m["_id"], "stripe.connected", m["_id"], account_id=acct["id"], livemode=tok["livemode"], oauth=True)
     return merchant_out({**m, "stripe": stripe})
 
 
@@ -466,6 +469,7 @@ async def disconnect_stripe(m=Depends(current_merchant), db=Depends(db_dep), fac
         except Exception:
             log.warning("could not delete webhook for %s", m["_id"], exc_info=True)
     await db.merchants.update_one({"_id": m["_id"]}, {"$unset": {"stripe": ""}})
+    await audit.record(db, m["_id"], "stripe.disconnected", m["_id"], account_id=(m.get("stripe") or {}).get("account_id"))
     return {"ok": True}
 
 
@@ -743,6 +747,11 @@ async def patch_affiliate(db, m: dict, aff: dict, body: AffiliatePatch, factory)
     warning = await sync_promotion_code(db, m, new, factory)
     if s or unset:
         await notify.affiliate_updated(db, m, new, aff["status"] if new["status"] != aff["status"] else None)
+        if new["status"] != aff["status"]:
+            await audit.record(db, m["_id"], f"affiliate.{new['status']}", aff["_id"], previous=aff["status"])
+        money = {k: (aff.get(k), new.get(k)) for k in ("campaign_id", "rate_override") if aff.get(k) != new.get(k)}
+        if money:
+            await audit.record(db, m["_id"], "affiliate.terms_changed", aff["_id"], **{k: {"from": a, "to": b} for k, (a, b) in money.items()})
     return {**out(new), "warning": warning}
 
 
@@ -830,7 +839,8 @@ async def clear_flags(referral_id: str, m=Depends(current_merchant), db=Depends(
     res = await db.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True}})
     if not res.matched_count:
         raise HTTPException(404, "referral not found")
-    await db.commissions.update_many({"referral_id": referral_id}, {"$set": {"held": False}})
+    released = await db.commissions.update_many({"referral_id": referral_id, "held": True}, {"$set": {"held": False}})
+    await audit.record(db, m["_id"], "referral.flags_cleared", referral_id, commissions_released=released.modified_count)
     async for c in db.commissions.find({"referral_id": referral_id}, {"_id": 1}):
         await notify.commission_updated(db, m["_id"], c["_id"])
     return {"ok": True}
@@ -844,6 +854,7 @@ async def reject_referral(referral_id: str, m=Depends(current_merchant), db=Depe
     voidable = {"referral_id": referral_id, "status": "pending", "payout_id": {"$exists": False}}
     ids = [c["_id"] async for c in db.commissions.find(voidable, {"_id": 1})]
     await db.commissions.update_many({"_id": {"$in": ids}}, {"$set": {"status": "void", "void_reason": "referral rejected", "amount_cents": 0}})
+    await audit.record(db, m["_id"], "referral.rejected", referral_id, commissions_voided=ids)
     for cid in ids:
         await notify.commission_updated(db, m["_id"], cid)
     return {"ok": True}
@@ -886,6 +897,13 @@ async def overview(m=Depends(current_merchant), db=Depends(db_dep)):
     }
 
 
+@router.get("/audit")
+async def audit_log(target: str | None = None, m=Depends(current_merchant), db=Depends(db_dep)):
+    """Who approved, rejected, cleared, voided or paid what, newest first."""
+    q = {"merchant_id": m["_id"]} | ({"target": target} if target else {})
+    return [out(r) for r in await db.audit_log.find(q).sort("created_at", -1).limit(500).to_list(None)]
+
+
 # ---------- payouts ----------
 
 
@@ -920,6 +938,7 @@ async def create_payout(body: PayoutIn, m=Depends(current_merchant), db=Depends(
     except Exception as e:
         log.warning("payout failed for %s: %s", m["_id"], e)
         raise HTTPException(502, f"{body.method} rejected the payout: {e}")
+    await audit.record(db, m["_id"], "payout.created", payout["_id"], **audit.payout_detail(payout))
     return out(payout)
 
 
@@ -955,12 +974,14 @@ async def connect_paypal(body: PayPalIn, m=Depends(current_merchant), db=Depends
         raise HTTPException(400, str(e))
     paypal = {"client_id": body.client_id.strip(), "secret_enc": encrypt(body.secret.strip()), "mode": body.mode, "connected_at": datetime.now(UTC)}
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"paypal": paypal}})
+    await audit.record(db, m["_id"], "paypal.connected", m["_id"], client_id=paypal["client_id"], mode=body.mode)
     return merchant_out({**m, "paypal": paypal})
 
 
 @router.delete("/paypal")
 async def disconnect_paypal(m=Depends(current_merchant), db=Depends(db_dep)):
     await db.merchants.update_one({"_id": m["_id"]}, {"$unset": {"paypal": ""}})
+    await audit.record(db, m["_id"], "paypal.disconnected", m["_id"])
     return {"ok": True}
 
 
@@ -1038,6 +1059,7 @@ async def tax_1099(year: int, m=Depends(current_merchant), user=Depends(current_
 async def undo_payout(payout_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
     if not await payout_svc.undo_manual_payout(db, m["_id"], payout_id):
         raise HTTPException(400, "only manual payouts marked paid can be undone")
+    await audit.record(db, m["_id"], "payout.undone", payout_id)
     return {"ok": True}
 
 
@@ -1045,6 +1067,7 @@ async def undo_payout(payout_id: str, m=Depends(current_merchant), db=Depends(db
 async def cancel_payout(payout_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
     if not await payout_svc.cancel_payout(db, m["_id"], payout_id):
         raise HTTPException(400, "only unfunded payouts can be cancelled")
+    await audit.record(db, m["_id"], "payout.cancelled", payout_id)
     return {"ok": True}
 
 

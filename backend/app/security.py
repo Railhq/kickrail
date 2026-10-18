@@ -8,6 +8,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from .config import get_settings
 from .db import get_db
 from .ids import hash_ip, sha256
+from .services import audit
 
 SESSION_DAYS = 30
 
@@ -88,6 +89,7 @@ async def current_merchant(request: Request, user: dict = Depends(current_user),
     merchant = await selected_merchant(db, user["_id"], request.headers.get("x-kickrail-program"))
     if not merchant:
         raise HTTPException(404, "no merchant workspace")
+    audit.as_user(user)
     return merchant
 
 
@@ -99,6 +101,7 @@ async def api_merchant(authorization: str = Header(default=""), db: AsyncDatabas
     merchant = await db.merchants.find_one({"secret_key_hash": sha256(key)})
     if not merchant:
         raise HTTPException(401, "unknown secret key")
+    audit.actor.set({"kind": "api_key"})
     return merchant
 
 

@@ -23,6 +23,7 @@ from .. import deps, plans
 from ..config import get_settings
 from ..ids import sha256
 from ..security import db_dep
+from ..services import audit
 from ..serializers import affiliate_url, join_url, portal_base
 from . import merchant as mr
 from . import server_api as api
@@ -541,6 +542,7 @@ async def mcp(request: Request):
             {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "Send your program's secret key as Authorization: Bearer sk_kr_... (Kickrail > Settings > Server API key)."}},
             status_code=401,
         )
+    audit.actor.set({"kind": "mcp"})
     try:
         body = json.loads(await request.body())
     except ValueError:

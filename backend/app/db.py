@@ -45,10 +45,11 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
             ([("user_id", A)], {}),
         ],
         "clicks": [([("merchant_id", A), ("affiliate_id", A), ("created_at", D)], {})],
+        # One referral per person per program, however many requests report them at once.
         "referrals": [
-            ([("merchant_id", A), ("stripe_customer_id", A)], {"sparse": True}),
-            ([("merchant_id", A), ("email", A)], {"sparse": True}),
-            ([("merchant_id", A), ("external_user_id", A)], {"sparse": True}),
+            ([("merchant_id", A), ("stripe_customer_id", A)], {"unique": True, "partialFilterExpression": {"stripe_customer_id": {"$type": "string"}}}),
+            ([("merchant_id", A), ("email", A)], {"unique": True, "partialFilterExpression": {"email": {"$type": "string"}}}),
+            ([("merchant_id", A), ("external_user_id", A)], {"unique": True, "partialFilterExpression": {"external_user_id": {"$type": "string"}}}),
             ([("merchant_id", A), ("affiliate_id", A), ("created_at", D)], {}),
         ],
         "commissions": [
@@ -67,15 +68,32 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
             ([("affiliate_id", A)], {}),
         ],
         "events": [([("merchant_id", A), ("created_at", D)], {})],
+        "audit_log": [([("merchant_id", A), ("created_at", D)], {}), ([("merchant_id", A), ("target", A), ("created_at", D)], {})],
+        # Every Stripe event Kickrail received, for 90 days: history, and a skip for ones already handled.
+        "stripe_events": [
+            ([("received_at", A)], {"expireAfterSeconds": 90 * 86400}),
+            ([("merchant_id", A), ("received_at", D)], {}),
+            ([("status", A), ("received_at", D)], {}),
+        ],
         "webhook_endpoints": [([("merchant_id", A)], {})],
         "webhook_deliveries": [([("status", A), ("next_attempt_at", A)], {}), ([("endpoint_id", A), ("created_at", D)], {}), ([("event_id", A)], {})],
         "emails": [([("status", A), ("next_attempt_at", A)], {}), ([("merchant_id", A), ("created_at", D)], {})],
         "invites": [([("token_hash", A)], {"unique": True}), ([("merchant_id", A)], {})],
     }
     await _migrate_portal_domains(db)
+    await _migrate_referral_indexes(db)
     for name, indexes in specs.items():
         for keys, opts in indexes:
             await db[name].create_index(keys, **opts)
+
+
+async def _migrate_referral_indexes(db: AsyncDatabase) -> None:
+    """The person lookups on referrals started as plain sparse indexes; they are unique now."""
+    info = await db.referrals.index_information()
+    for field in ("stripe_customer_id", "email", "external_user_id"):
+        name = f"merchant_id_1_{field}_1"
+        if name in info and not info[name].get("unique"):
+            await db.referrals.drop_index(name)
 
 
 async def _migrate_portal_domains(db: AsyncDatabase) -> None:
