@@ -63,6 +63,10 @@ The tests use fake Stripe clients and signed webhooks. Before going live, run th
 - invoice-to-payment-intent lookup through `invoice_payments`
 - Connect Express onboarding, and cross-border transfer eligibility for affiliate countries (for example, India is not supported for cross-border payouts, so those affiliates need manual payouts)
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Contributors sign a short [CLA](CLA.md) once, by commenting on their first pull request.
+
 ## License
 
 [AGPL-3.0](LICENSE). You can use, modify and self-host Kickrail. If you run a modified version as a service for others, you must publish your changes under the same license. The hosted version is at [kickrail.com](https://kickrail.com).
