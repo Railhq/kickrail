@@ -79,6 +79,11 @@ async def test_script_and_test_link(client):
     assert r.status_code == 204
     d = (await client.get(f"/portal/{S['aff_id']}", headers=auth(S["aff"]))).json()
     assert d["last_test"]["url"].startswith("https://acme.io/") and d["clicks"] == 0
+    # Same browser opens the real link afterwards: kr.js reuses the id, and the click now counts.
+    await client.post("/track/click", content=f'{{"key":"{S["pk"]}","id":"kr_testclick0000000001","token":"{S["token"]}","url":"https://acme.io/?via=x"}}')
+    assert (await client.get(f"/portal/{S['aff_id']}", headers=auth(S["aff"]))).json()["clicks"] == 1
+    await client.post("/track/click", content=f'{{"key":"{S["pk"]}","id":"kr_testclick0000000001","token":"{S["token"]}","url":"https://acme.io/?via=x"}}')
+    assert (await client.get(f"/portal/{S['aff_id']}", headers=auth(S["aff"]))).json()["clicks"] == 1
 
 
 async def test_click_signup_checkout_invoice(client, db, fakes):
@@ -224,7 +229,7 @@ async def test_stripe_payout_via_connect(client, db, fakes):
 
     d = (await client.get(f"/portal/{S['aff_id']}", headers=auth(S["aff"]))).json()
     assert d["totals"]["usd"] == {"in_hold": 0, "payable": 0, "paid": 2250 + 1500 + 3000 - 1500}
-    assert d["leads"] == 3 and d["customers"] == 3 and d["clicks"] == 1
+    assert d["leads"] == 3 and d["customers"] == 3 and d["clicks"] == 2
 
 
 async def test_commission_window_ends(client, db):

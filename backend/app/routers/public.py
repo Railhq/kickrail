@@ -86,7 +86,13 @@ async def click(request: Request, db=Depends(db_dep)):
                 }
             )
         except DuplicateKeyError:
-            pass
+            # kr.js reuses the click id when the same link is opened again, so a real visit after a
+            # kr_test=1 one in the same browser would be dropped. Promote the test click instead.
+            if not test:
+                await db.clicks.update_one(
+                    {"_id": click_id, "merchant_id": m["_id"], "token": token, "test": True},
+                    {"$set": {"test": False, "affiliate_id": aff["_id"], "landing_url": str(b.get("url", ""))[:1000], "referrer": str(b.get("referrer", ""))[:1000], "created_at": datetime.now(UTC)}},
+                )
     return Response(status_code=204, headers=CORS)
 
 
