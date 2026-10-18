@@ -1,4 +1,8 @@
-# Kickrail
+<p align="center"><img src="web/src/app/icon.svg" width="72" alt="Kickrail"></p>
+
+<h1 align="center">Kickrail</h1>
+
+<p align="center">Open-source affiliate and referral tracking for SaaS products that bill through Stripe.<br><a href="https://kickrail.com">kickrail.com</a> · <a href="https://kickrail.com/docs">Docs</a> · <a href="https://kickrail.com/docs/switching">Switch from Rewardful</a> · <a href="https://kickrail.com/docs/mcp">Set up with an AI agent</a></p>
 
 Affiliate and referral tracking for SaaS products that bill through Stripe. It is multi-tenant: any number of merchants can run programs, and affiliates use one login across all of them.
 
