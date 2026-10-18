@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 
+from ..db import run_in_transaction
 from ..domain.fraud import canonical_email, self_referral_flags
 from ..ids import new_id
 from . import notify
@@ -185,14 +186,17 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
     }
     # Sparse indexes skip missing fields, not nulls, so drop the empty ones.
     referral = {k: v for k, v in referral.items() if v is not None or k in ("first_paid_at",)}
+    async def create(tdb):
+        await tdb.referrals.insert_one(referral)
+        await notify.referral_created(tdb, merchant["_id"], referral)
+
     try:
-        await db.referrals.insert_one(referral)
+        await run_in_transaction(db, create)
     except DuplicateKeyError:
         # A concurrent request (say the browser script and the merchant's server) won the race.
         if not _retry:
             raise
         return await attach_referral(db, merchant, inp, customer_created, _retry=False)
-    await notify.referral_created(db, merchant["_id"], referral)
     # A form the script picked up on its own may be a newsletter box, not a signup.
     if not inp.auto and not referral.get("test"):
         await award_lead_bounty(db, merchant, referral)
@@ -224,9 +228,12 @@ async def award_lead_bounty(db: AsyncDatabase, merchant: dict, referral: dict) -
         "due_at": now + timedelta(days=campaign["hold_days"]),
         "created_at": now,
     }
+    async def create(tdb):
+        await tdb.commissions.insert_one(doc)
+        await notify.commission_created(tdb, merchant, doc)
+
     try:
-        await db.commissions.insert_one(doc)
+        await run_in_transaction(db, create)
     except DuplicateKeyError:
         return None
-    await notify.commission_created(db, merchant, doc)
     return doc

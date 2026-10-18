@@ -106,6 +106,10 @@ send_mail: SendMail = _send_mail
 _wake = asyncio.Event()
 
 
+def wake() -> None:
+    _wake.set()
+
+
 def sign(secret: str, body: str, t: int | None = None) -> str:
     t = t or int(time.time())
     return f"t={t},v1={hmac.new(secret.encode(), f'{t}.{body}'.encode(), hashlib.sha256).hexdigest()}"

@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr
 
 from .. import plans
 from ..config import get_settings
+from ..db import run_in_transaction
 from ..ids import new_id, random_id, sha256
 from ..security import current_merchant, current_user, db_dep
 from ..services import notify
@@ -45,9 +46,7 @@ async def invite(body: InviteIn, m=Depends(current_merchant), user=Depends(curre
     token = random_id(32)
     now = datetime.now(UTC)
     # A new invite replaces any open one for the same email.
-    await db.invites.update_many({"merchant_id": m["_id"], "email": email, "accepted_at": {"$exists": False}}, {"$set": {"revoked_at": now}})
     inv = {"_id": new_id("inv"), "merchant_id": m["_id"], "email": email, "token_hash": sha256(token), "invited_by": user["_id"], "created_at": now, "expires_at": now + timedelta(days=INVITE_DAYS)}
-    await db.invites.insert_one(inv)
     url = f"{get_settings().public_url}/invite/{token}"
     text, html = notify.render(
         m, f"Join {m['name']} on Kickrail",
@@ -56,7 +55,13 @@ async def invite(body: InviteIn, m=Depends(current_merchant), user=Depends(curre
     )
     from ..services.outbox import queue_email
 
-    await queue_email(db, email, f"{user.get('name') or 'A teammate'} invited you to {m['name']} on Kickrail", text, html, kind="team_invite", merchant_id=m["_id"], reply_to=user["email"])
+
+    async def invite(tdb):
+        await tdb.invites.update_many({"merchant_id": m["_id"], "email": email, "accepted_at": {"$exists": False}}, {"$set": {"revoked_at": now}})
+        await tdb.invites.insert_one(inv)
+        await queue_email(tdb, email, f"{user.get('name') or 'A teammate'} invited you to {m['name']} on Kickrail", text, html, kind="team_invite", merchant_id=m["_id"], reply_to=user["email"])
+
+    await run_in_transaction(db, invite)
     return {"id": inv["_id"], "email": email, "created_at": now, "expires_at": inv["expires_at"]}
 
 

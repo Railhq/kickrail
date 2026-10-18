@@ -15,7 +15,6 @@ from ..ids import hash_ip
 from .. import plans
 from ..security import api_merchant, db_dep
 from ..serializers import affiliate_obj, commission_obj, payout_obj, referral_obj
-from ..services import audit
 from ..services.affiliates import AffiliateError, add_by_email
 from ..services.payouts import create_payout, payable
 from ..services.referrals import AttachInput, attach_referral, find_referral
@@ -256,7 +255,6 @@ async def record_payout(body: PayoutCreate, m=Depends(managed_api), db=Depends(d
         p = await create_payout(db, m, currency, "manual", None, affiliate_ids=body.affiliate_ids, reference=body.reference)
     except ValueError as e:
         raise HTTPException(409, str(e))
-    await audit.record(db, m["_id"], "payout.created", p["_id"], **audit.payout_detail(p))
     return payout_obj(p)
 
 

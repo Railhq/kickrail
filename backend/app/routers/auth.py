@@ -7,6 +7,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from ..config import get_settings
+from ..db import run_in_transaction
 from ..ids import new_id, random_id, sha256
 from ..security import MAX_PROGRAMS, check_password, client_ip_hash, db_dep, email_verified, hash_password, issue_token, public_user, selected_merchant, signed_in_user
 from ..services.notify import account_email
@@ -129,13 +130,17 @@ def _recent(sent_at: datetime | None) -> bool:
 async def _send_verification(db, user: dict, next: str | None, site: str | None = None) -> None:
     token = random_id(40)
     now = datetime.now(UTC)
-    await db.users.update_one({"_id": user["_id"]}, {"$set": {"verify_token_hash": sha256(token), "verify_expires_at": now + VERIFY_TTL, "verify_sent_at": now, "verify_next": next}})
     url = f"{await _link_base(db, site)}/verify?token={token}"
-    await account_email(
-        db, user["email"], "verify_email", "Confirm your email for Kickrail", "Confirm your email",
-        [f"Hi {user.get('name') or 'there'}, confirm this is your address to finish setting up your Kickrail account.", "The link works for 3 days. If you didn't sign up, ignore this email and nothing happens."],
-        ("Confirm email", url),
-    )
+
+    async def send(tdb):
+        await tdb.users.update_one({"_id": user["_id"]}, {"$set": {"verify_token_hash": sha256(token), "verify_expires_at": now + VERIFY_TTL, "verify_sent_at": now, "verify_next": next}})
+        await account_email(
+            tdb, user["email"], "verify_email", "Confirm your email for Kickrail", "Confirm your email",
+            [f"Hi {user.get('name') or 'there'}, confirm this is your address to finish setting up your Kickrail account.", "The link works for 3 days. If you didn't sign up, ignore this email and nothing happens."],
+            ("Confirm email", url),
+        )
+
+    await run_in_transaction(db, send)
 
 
 class TokenIn(BaseModel):
@@ -180,12 +185,17 @@ async def forgot_password(body: ForgotIn, db=Depends(db_dep)):
     if user and not _recent(user.get("reset_sent_at")):
         token = random_id(40)
         now = datetime.now(UTC)
-        await db.users.update_one({"_id": user["_id"]}, {"$set": {"reset_token_hash": sha256(token), "reset_expires_at": now + RESET_TTL, "reset_sent_at": now}})
-        await account_email(
-            db, user["email"], "password_reset", "Reset your Kickrail password", "Reset your password",
-            ["Someone asked to reset the password for this Kickrail account. If it was you, use the button below. The link works for 1 hour.", "If it wasn't you, ignore this email. Your password stays the same."],
-            ("Choose a new password", f"{await _link_base(db, body.site)}/reset?token={quote(token)}"),
-        )
+        url = f"{await _link_base(db, body.site)}/reset?token={quote(token)}"
+
+        async def send(tdb):
+            await tdb.users.update_one({"_id": user["_id"]}, {"$set": {"reset_token_hash": sha256(token), "reset_expires_at": now + RESET_TTL, "reset_sent_at": now}})
+            await account_email(
+                tdb, user["email"], "password_reset", "Reset your Kickrail password", "Reset your password",
+                ["Someone asked to reset the password for this Kickrail account. If it was you, use the button below. The link works for 1 hour.", "If it wasn't you, ignore this email. Your password stays the same."],
+                ("Choose a new password", url),
+            )
+
+        await run_in_transaction(db, send)
     return {"ok": True}
 
 

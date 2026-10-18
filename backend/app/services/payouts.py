@@ -23,13 +23,15 @@ import csv
 import io
 import logging
 from datetime import UTC, datetime
+from functools import partial
 
 from pymongo.asynchronous.database import AsyncDatabase
 
 from ..config import get_settings
+from ..db import run_in_transaction
 from ..domain.commission import payable_lines
 from ..ids import new_id
-from . import notify
+from . import audit, notify
 from .outbox import emit
 from .paypal import DONE_FAILED, DONE_OK
 from .stripe_api import PlatformApi
@@ -120,9 +122,14 @@ async def create_payout(
     if method == "manual":
         now = datetime.now(UTC)
         payout["paid_at"] = now
-        await db.payouts.insert_one(payout)
-        await db.commissions.update_many({"payout_id": payout_id}, {"$set": {"status": "paid", "paid_at": now}})
-        await notify.payout_paid(db, merchant, payout)
+
+        async def paid(tdb):
+            await tdb.payouts.insert_one(payout)
+            await tdb.commissions.update_many({"payout_id": payout_id}, {"$set": {"status": "paid", "paid_at": now}})
+            await notify.payout_paid(tdb, merchant, payout)
+            await audit.record(tdb, merchant["_id"], "payout.created", payout_id, **audit.payout_detail(payout))
+
+        await run_in_transaction(db, paid)
         return payout
 
     if method == "paypal":
@@ -139,7 +146,7 @@ async def create_payout(
             await db.commissions.update_many({"payout_id": payout_id}, {"$unset": {"payout_id": ""}})
             raise
         payout["paypal_batch_id"] = batch_id
-        await db.payouts.insert_one(payout)
+        await _save_new(db, merchant, payout)
         return payout
 
     assert platform is not None
@@ -154,26 +161,42 @@ async def create_payout(
         raise
     payout["funding_session_id"] = session_id
     payout["funding_url"] = url
-    await db.payouts.insert_one(payout)
+    await _save_new(db, merchant, payout)
     return payout
+
+
+async def _save_new(db: AsyncDatabase, merchant: dict, payout: dict) -> None:
+    async def save(tdb):
+        await tdb.payouts.insert_one(payout)
+        await audit.record(tdb, merchant["_id"], "payout.created", payout["_id"], **audit.payout_detail(payout))
+
+    await run_in_transaction(db, save)
 
 
 async def undo_manual_payout(db: AsyncDatabase, merchant_id: str, payout_id: str) -> bool:
     """For a batch marked paid by mistake: its commissions go back to payable."""
-    res = await db.payouts.update_one(
-        {"_id": payout_id, "merchant_id": merchant_id, "method": "manual", "status": "paid"}, {"$set": {"status": "undone", "undone_at": datetime.now(UTC)}}
-    )
-    if res.modified_count:
-        await db.commissions.update_many({"payout_id": payout_id, "status": "paid"}, {"$set": {"status": "pending"}, "$unset": {"payout_id": "", "paid_at": ""}})
-        await notify.payout_event(db, merchant_id, "payout.undone", payout_id)
-    return bool(res.modified_count)
+    async def undo(tdb) -> bool:
+        res = await tdb.payouts.update_one(
+            {"_id": payout_id, "merchant_id": merchant_id, "method": "manual", "status": "paid"}, {"$set": {"status": "undone", "undone_at": datetime.now(UTC)}}
+        )
+        if res.modified_count:
+            await tdb.commissions.update_many({"payout_id": payout_id, "status": "paid"}, {"$set": {"status": "pending"}, "$unset": {"payout_id": "", "paid_at": ""}})
+            await notify.payout_event(tdb, merchant_id, "payout.undone", payout_id)
+            await audit.record(tdb, merchant_id, "payout.undone", payout_id)
+        return bool(res.modified_count)
+
+    return await run_in_transaction(db, undo)
 
 
 async def cancel_payout(db: AsyncDatabase, merchant_id: str, payout_id: str) -> bool:
-    res = await db.payouts.update_one({"_id": payout_id, "merchant_id": merchant_id, "status": "awaiting_funding"}, {"$set": {"status": "cancelled"}})
-    if res.modified_count:
-        await db.commissions.update_many({"payout_id": payout_id, "status": "pending"}, {"$unset": {"payout_id": ""}})
-    return bool(res.modified_count)
+    async def cancel(tdb) -> bool:
+        res = await tdb.payouts.update_one({"_id": payout_id, "merchant_id": merchant_id, "status": "awaiting_funding"}, {"$set": {"status": "cancelled"}})
+        if res.modified_count:
+            await tdb.commissions.update_many({"payout_id": payout_id, "status": "pending"}, {"$unset": {"payout_id": ""}})
+            await audit.record(tdb, merchant_id, "payout.cancelled", payout_id)
+        return bool(res.modified_count)
+
+    return await run_in_transaction(db, cancel)
 
 
 async def complete_funded_payout(db: AsyncDatabase, payout_id: str, session_id: str, platform: PlatformApi) -> str:
@@ -200,13 +223,17 @@ async def complete_funded_payout(db: AsyncDatabase, payout_id: str, session_id: 
             await db.commissions.update_many({"_id": {"$in": item["commission_ids"]}}, {"$unset": {"payout_id": ""}})
             items.append({**item, "error": str(e)[:300]})
     status = "paid" if failures == 0 else ("failed" if failures == len(items) else "partial")
-    await db.payouts.update_one({"_id": payout_id}, {"$set": {"items": items, "status": status, "funding_charge_id": charge_id, "paid_at": now}})
-    merchant = await db.merchants.find_one({"_id": payout["merchant_id"]})
-    done = await db.payouts.find_one({"_id": payout_id})
-    if status == "failed":
-        await notify.payout_event(db, payout["merchant_id"], "payout.failed", payout_id)
-    elif merchant and done:
-        await notify.payout_paid(db, merchant, done, [i for i in items if not i.get("error")])
+
+    async def settle(tdb):
+        await tdb.payouts.update_one({"_id": payout_id}, {"$set": {"items": items, "status": status, "funding_charge_id": charge_id, "paid_at": now}})
+        merchant = await tdb.merchants.find_one({"_id": payout["merchant_id"]})
+        done = await tdb.payouts.find_one({"_id": payout_id})
+        if status == "failed":
+            await notify.payout_event(tdb, payout["merchant_id"], "payout.failed", payout_id)
+        elif merchant and done:
+            await notify.payout_paid(tdb, merchant, done, [i for i in items if not i.get("error")])
+
+    await run_in_transaction(db, settle)
     return f"payout {status}"
 
 
@@ -214,37 +241,41 @@ async def sync_paypal_payout(db: AsyncDatabase, payout: dict, paypal) -> str:
     """Apply PayPal's item results. Paid items mark their commissions paid; failed
     or returned ones go back into the payable pool. Safe to call repeatedly."""
     batch = await paypal.batch(payout["paypal_batch_id"])
-    by_item = {i["sender_item_id"]: i for i in batch["items"]}
-    merchant = await db.merchants.find_one({"_id": payout["merchant_id"]})
-    now, newly_paid, items = datetime.now(UTC), [], []
-    for item in payout["items"]:
-        remote = by_item.get(item["sender_item_id"])
-        if remote and item.get("status") == "pending":
-            if remote["status"] in DONE_OK:
-                await db.commissions.update_many({"_id": {"$in": item["commission_ids"]}}, {"$set": {"status": "paid", "paid_at": now}})
-                item = {**item, "status": "paid", "paypal_item_id": remote["item_id"]}
-                newly_paid.append(item)
-            elif remote["status"] in DONE_FAILED:
-                await db.commissions.update_many({"_id": {"$in": item["commission_ids"]}}, {"$unset": {"payout_id": ""}})
-                item = {**item, "status": "failed", "error": remote["error"] or remote["status"].lower()}
-            else:
-                item = {**item, "paypal_state": remote["status"]}
-        items.append(item)
-    statuses = {i["status"] for i in items}
-    s: dict = {"items": items, "paypal_status": batch["status"], "checked_at": now}
-    if "pending" not in statuses:
-        s["status"] = "paid" if statuses == {"paid"} else "failed" if statuses == {"failed"} else "partial"
-        s["paid_at"] = now
-    await db.payouts.update_one({"_id": payout["_id"]}, {"$set": s})
-    done = await db.payouts.find_one({"_id": payout["_id"]})
-    # Emails go out per affiliate as PayPal confirms them; the event once the batch settles.
-    if merchant and newly_paid:
-        await notify.payout_paid(db, merchant, done, newly_paid, event=False)
-    if s.get("status") == "failed":
-        await notify.payout_event(db, payout["merchant_id"], "payout.failed", payout["_id"])
-    elif s.get("status"):
-        await notify.payout_event(db, payout["merchant_id"], "payout.paid", payout["_id"])
-    return s.get("status", "processing")
+
+    async def apply(tdb) -> str:
+        by_item = {i["sender_item_id"]: i for i in batch["items"]}
+        merchant = await tdb.merchants.find_one({"_id": payout["merchant_id"]})
+        now, newly_paid, items = datetime.now(UTC), [], []
+        for item in payout["items"]:
+            remote = by_item.get(item["sender_item_id"])
+            if remote and item.get("status") == "pending":
+                if remote["status"] in DONE_OK:
+                    await tdb.commissions.update_many({"_id": {"$in": item["commission_ids"]}}, {"$set": {"status": "paid", "paid_at": now}})
+                    item = {**item, "status": "paid", "paypal_item_id": remote["item_id"]}
+                    newly_paid.append(item)
+                elif remote["status"] in DONE_FAILED:
+                    await tdb.commissions.update_many({"_id": {"$in": item["commission_ids"]}}, {"$unset": {"payout_id": ""}})
+                    item = {**item, "status": "failed", "error": remote["error"] or remote["status"].lower()}
+                else:
+                    item = {**item, "paypal_state": remote["status"]}
+            items.append(item)
+        statuses = {i["status"] for i in items}
+        s: dict = {"items": items, "paypal_status": batch["status"], "checked_at": now}
+        if "pending" not in statuses:
+            s["status"] = "paid" if statuses == {"paid"} else "failed" if statuses == {"failed"} else "partial"
+            s["paid_at"] = now
+        await tdb.payouts.update_one({"_id": payout["_id"]}, {"$set": s})
+        done = await tdb.payouts.find_one({"_id": payout["_id"]})
+        # Emails go out per affiliate as PayPal confirms them; the event once the batch settles.
+        if merchant and newly_paid:
+            await notify.payout_paid(tdb, merchant, done, newly_paid, event=False)
+        if s.get("status") == "failed":
+            await notify.payout_event(tdb, payout["merchant_id"], "payout.failed", payout["_id"])
+        elif s.get("status"):
+            await notify.payout_event(tdb, payout["merchant_id"], "payout.paid", payout["_id"])
+        return s.get("status", "processing")
+
+    return await run_in_transaction(db, apply)
 
 
 async def announce_due(db: AsyncDatabase, now: datetime | None = None) -> int:
@@ -259,28 +290,32 @@ async def announce_due(db: AsyncDatabase, now: datetime | None = None) -> int:
             new = await db.commissions.find({"_id": {"$in": ids}, "due_announced_at": {"$exists": False}}, {"amount_cents": 1}).to_list(None)
             if not new:
                 continue
-            await db.commissions.update_many({"_id": {"$in": [c["_id"] for c in new]}}, {"$set": {"due_announced_at": now}})
             # A clawback landing on a balance already announced lowers it; that isn't news.
-            if not any(c["amount_cents"] > 0 for c in new):
-                continue
-            aff = await db.affiliates.find_one({"_id": line["affiliate_id"]}, {"campaign_id": 1, "metadata": 1})
-            await emit(
-                db, merchant_id, "payout.due",
-                {
-                    "object": "payout_due",
-                    "affiliate_id": line["affiliate_id"],
-                    "campaign_id": aff["campaign_id"],
-                    "email": line["email"],
-                    "name": line["name"],
-                    "metadata": aff.get("metadata"),
-                    "currency": line["currency"],
-                    "amount_cents": line["amount_cents"],
-                    "commission_ids": ids,
-                    "needs_tax_form": line["needs_tax_form"],
-                },
-            )
-            sent += 1
+            news = any(c["amount_cents"] > 0 for c in new)
+            await run_in_transaction(db, partial(_announce, merchant_id=merchant_id, line=line, ids=ids, new=new, now=now, news=news))
+            sent += news
     return sent
+
+
+async def _announce(tdb, *, merchant_id: str, line: dict, ids: list[str], new: list[dict], now: datetime, news: bool) -> None:
+    await tdb.commissions.update_many({"_id": {"$in": [c["_id"] for c in new]}}, {"$set": {"due_announced_at": now}})
+    if news:
+        aff = await tdb.affiliates.find_one({"_id": line["affiliate_id"]}, {"campaign_id": 1, "metadata": 1})
+        await emit(
+            tdb, merchant_id, "payout.due",
+            {
+                "object": "payout_due",
+                "affiliate_id": line["affiliate_id"],
+                "campaign_id": aff["campaign_id"],
+                "email": line["email"],
+                "name": line["name"],
+                "metadata": aff.get("metadata"),
+                "currency": line["currency"],
+                "amount_cents": line["amount_cents"],
+                "commission_ids": ids,
+                "needs_tax_form": line["needs_tax_form"],
+            },
+        )
 
 
 async def poll_paypal(db: AsyncDatabase, factory) -> None:

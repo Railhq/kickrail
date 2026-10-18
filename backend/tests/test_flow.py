@@ -303,3 +303,31 @@ async def test_money_actions_are_audited(client, db):
     assert [r["action"] for r in rows][:2] == ["affiliate.approved", "affiliate.rejected"] and rows[0]["detail"]["previous"] == "rejected"
     # Affiliates can't read the program's log.
     assert (await client.get("/merchant/audit", headers=auth(S["aff"]))).status_code == 404
+
+
+async def test_outbox_rows_commit_with_the_write(db):
+    """A commission and its webhook event commit together or not at all."""
+    if not (await db.command("hello")).get("setName"):
+        pytest.skip("transactions need a replica set (set KR_TEST_MONGODB_URI)")
+    from app.services import notify, stripe_events
+
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    referral = await db.referrals.find_one({"merchant_id": m["_id"], "flags": {"$size": 0}, "test": {"$exists": False}})
+    real = notify.commission_created
+
+    async def half(tdb, merchant, doc):
+        await tdb.events.insert_one({"_id": "evt_half", "merchant_id": merchant["_id"], "type": "commission.created"})
+        raise RuntimeError("crashed before commit")
+
+    notify.commission_created = half
+    try:
+        with pytest.raises(RuntimeError):
+            await stripe_events.earn(db, m, referral, "inv:atomic", 5000, "usd", datetime.now(UTC), None)
+    finally:
+        notify.commission_created = real
+    assert not await db.commissions.find_one({"source_key": "inv:atomic"})
+    assert not await db.events.find_one({"_id": "evt_half"})
+    # Run again for real: both land.
+    assert (await stripe_events.earn(db, m, referral, "inv:atomic", 5000, "usd", datetime.now(UTC), None)).startswith("commission")
+    c = await db.commissions.find_one({"source_key": "inv:atomic"})
+    assert await db.events.find_one({"type": "commission.created", "data.id": c["_id"]})

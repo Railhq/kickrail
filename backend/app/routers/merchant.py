@@ -16,6 +16,7 @@ from pymongo.errors import DuplicateKeyError
 from .. import plans
 from ..config import get_settings
 from ..crypto import decrypt, encrypt
+from ..db import run_in_transaction
 from ..deps import merchant_api_factory, merchant_key_client, paypal_factory, paypal_key_client, merchant_account_client, platform_api, stripe_oauth, stripe_oauth_optional, rewardful_client
 from ..domain.commission import describe_rate, describe_rule
 from ..ids import new_id, random_id, sha256, slugify
@@ -836,27 +837,37 @@ async def list_referrals(flagged: bool = False, m=Depends(current_merchant), db=
 
 @router.post("/referrals/{referral_id}/clear")
 async def clear_flags(referral_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
-    res = await db.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True}})
-    if not res.matched_count:
+    async def clear(tdb) -> bool:
+        res = await tdb.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True}})
+        if not res.matched_count:
+            return False
+        released = await tdb.commissions.update_many({"referral_id": referral_id, "held": True}, {"$set": {"held": False}})
+        await audit.record(tdb, m["_id"], "referral.flags_cleared", referral_id, commissions_released=released.modified_count)
+        async for c in tdb.commissions.find({"referral_id": referral_id}, {"_id": 1}):
+            await notify.commission_updated(tdb, m["_id"], c["_id"])
+        return True
+
+    if not await run_in_transaction(db, clear):
         raise HTTPException(404, "referral not found")
-    released = await db.commissions.update_many({"referral_id": referral_id, "held": True}, {"$set": {"held": False}})
-    await audit.record(db, m["_id"], "referral.flags_cleared", referral_id, commissions_released=released.modified_count)
-    async for c in db.commissions.find({"referral_id": referral_id}, {"_id": 1}):
-        await notify.commission_updated(db, m["_id"], c["_id"])
     return {"ok": True}
 
 
 @router.post("/referrals/{referral_id}/reject")
 async def reject_referral(referral_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
-    res = await db.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True, "rejected": True}})
-    if not res.matched_count:
+    async def reject(tdb) -> bool:
+        res = await tdb.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True, "rejected": True}})
+        if not res.matched_count:
+            return False
+        voidable = {"referral_id": referral_id, "status": "pending", "payout_id": {"$exists": False}}
+        ids = [c["_id"] async for c in tdb.commissions.find(voidable, {"_id": 1})]
+        await tdb.commissions.update_many({"_id": {"$in": ids}}, {"$set": {"status": "void", "void_reason": "referral rejected", "amount_cents": 0}})
+        await audit.record(tdb, m["_id"], "referral.rejected", referral_id, commissions_voided=ids)
+        for cid in ids:
+            await notify.commission_updated(tdb, m["_id"], cid)
+        return True
+
+    if not await run_in_transaction(db, reject):
         raise HTTPException(404, "referral not found")
-    voidable = {"referral_id": referral_id, "status": "pending", "payout_id": {"$exists": False}}
-    ids = [c["_id"] async for c in db.commissions.find(voidable, {"_id": 1})]
-    await db.commissions.update_many({"_id": {"$in": ids}}, {"$set": {"status": "void", "void_reason": "referral rejected", "amount_cents": 0}})
-    await audit.record(db, m["_id"], "referral.rejected", referral_id, commissions_voided=ids)
-    for cid in ids:
-        await notify.commission_updated(db, m["_id"], cid)
     return {"ok": True}
 
 
@@ -938,7 +949,6 @@ async def create_payout(body: PayoutIn, m=Depends(current_merchant), db=Depends(
     except Exception as e:
         log.warning("payout failed for %s: %s", m["_id"], e)
         raise HTTPException(502, f"{body.method} rejected the payout: {e}")
-    await audit.record(db, m["_id"], "payout.created", payout["_id"], **audit.payout_detail(payout))
     return out(payout)
 
 
@@ -1059,7 +1069,6 @@ async def tax_1099(year: int, m=Depends(current_merchant), user=Depends(current_
 async def undo_payout(payout_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
     if not await payout_svc.undo_manual_payout(db, m["_id"], payout_id):
         raise HTTPException(400, "only manual payouts marked paid can be undone")
-    await audit.record(db, m["_id"], "payout.undone", payout_id)
     return {"ok": True}
 
 
@@ -1067,7 +1076,6 @@ async def undo_payout(payout_id: str, m=Depends(current_merchant), db=Depends(db
 async def cancel_payout(payout_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
     if not await payout_svc.cancel_payout(db, m["_id"], payout_id):
         raise HTTPException(400, "only unfunded payouts can be cancelled")
-    await audit.record(db, m["_id"], "payout.cancelled", payout_id)
     return {"ok": True}
 
 

@@ -9,6 +9,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 
 from .. import plans
+from ..db import run_in_transaction
 from ..domain.commission import describe_rule
 from ..ids import new_id, random_id, sha256, slugify
 from ..security import can_be_paid
@@ -159,11 +160,14 @@ async def add_link(db: AsyncDatabase, m: dict, aff: dict, token: str, landing_ur
     if await db.affiliate_links.count_documents({"affiliate_id": aff["_id"]}) >= 50:
         raise AffiliateError("an affiliate can have at most 50 links", 422)
     link = {"_id": new_id("lnk"), "merchant_id": m["_id"], "affiliate_id": aff["_id"], "token": token, "landing_url": check_landing(m, landing_url), "label": label.strip()[:80], "created_at": datetime.now(UTC)}
+    async def create(tdb):
+        await tdb.affiliate_links.insert_one(link)
+        await notify.affiliate_updated(tdb, m, aff)
+
     try:
-        await db.affiliate_links.insert_one(link)
+        await run_in_transaction(db, create)
     except DuplicateKeyError as e:
         raise AffiliateError("that link name is taken in this program", 409) from e
-    await notify.affiliate_updated(db, m, aff)
     return link_obj(m, link)
 
 

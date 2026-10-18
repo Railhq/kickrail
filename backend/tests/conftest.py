@@ -6,7 +6,7 @@ import secrets
 import time
 
 os.environ.update(
-    KR_MONGODB_URI="mongodb://127.0.0.1:27017",
+    KR_MONGODB_URI=os.environ.get("KR_TEST_MONGODB_URI", "mongodb://127.0.0.1:27017"),
     KR_MONGODB_DB=f"kickrail_test_{secrets.token_hex(4)}",
     KR_APP_SECRET="test-secret-" + "x" * 40,
     KR_INTERNAL_TOKEN="internal-test",

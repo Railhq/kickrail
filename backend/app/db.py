@@ -1,3 +1,7 @@
+from collections.abc import Awaitable, Callable
+from functools import partial
+from typing import Any, TypeVar
+
 from pymongo import ASCENDING, DESCENDING, AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
 
@@ -15,6 +19,54 @@ async def get_db() -> AsyncDatabase:
         _db = _client[s.mongodb_db]
         await ensure_indexes(_db)
     return _db
+
+
+class _InSession:
+    """A database handle whose collection calls all join one session, so code written
+    against a plain database (notify, the outbox) runs inside the caller's transaction."""
+
+    def __init__(self, db: AsyncDatabase, session):
+        self._db, self._session = db, session
+
+    def __getattr__(self, name: str):
+        return _CollectionInSession(self._db[name], self._session)
+
+    __getitem__ = __getattr__
+
+
+class _CollectionInSession:
+    def __init__(self, coll, session):
+        self._coll, self._session = coll, session
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._coll, name)
+        return partial(attr, session=self._session) if callable(attr) else attr
+
+
+_transactions: bool | None = None
+T = TypeVar("T")
+
+
+async def run_in_transaction(db: Any, fn: Callable[[Any], Awaitable[T]]) -> T:
+    """Run `fn(db)` so its writes, and the outbox rows it queues, commit together or not
+    at all. Retried on transient conflicts, so `fn` must be safe to run again and must not
+    call outside services. A unique-key error aborts the transaction and is raised to the
+    caller. On a standalone server (local dev) `fn` runs without a transaction."""
+    global _transactions
+    if isinstance(db, _InSession):
+        return await fn(db)  # already inside one
+    if _transactions is None:
+        hello = await db.command("hello")
+        _transactions = bool(hello.get("setName")) or hello.get("msg") == "isdbgrid"
+    if not _transactions:
+        result = await fn(db)
+    else:
+        async with db.client.start_session() as s:
+            result = await s.with_transaction(lambda s: fn(_InSession(db, s)))
+    from .services.outbox import wake
+
+    wake()  # the dispatcher can see the new rows only once they commit
+    return result
 
 
 async def close_db() -> None:
