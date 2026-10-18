@@ -101,6 +101,7 @@ class ProgramUpdate(BaseModel):
     cookie_days: int | None = Field(default=None, ge=1, le=365, description="how long a click counts")
     param_names: list[str] | None = Field(default=None, min_length=1, max_length=5, description="URL parameters the script reads, e.g. ['via', 'ref']")
     auto_approve: bool | None = Field(default=None, description="approve people who join without review")
+    attribution: Literal["first", "last"] | None = Field(default=None, description="first: the first affiliate to refer someone keeps them. last: a newer click, link or code moves them, until their first payment")
 
 
 class AffiliateArgs(BaseModel):

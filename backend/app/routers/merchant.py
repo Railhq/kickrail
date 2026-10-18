@@ -24,7 +24,7 @@ from ..security import MAX_PROGRAMS, can_be_paid, current_merchant, current_user
 from ..serializers import affiliate_url, code_obj, join_url, link_obj, portal_base
 from ..services import audit, notify
 from ..services import payouts as payout_svc
-from ..services import rewardful_import
+from ..services import rewardful_import, stripe_sync
 from ..services.exports import EXPORTS
 from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, sync_promotion_code
 from ..services.notify import EMAIL_KINDS
@@ -41,7 +41,7 @@ def out(doc: dict | None, *drop: str) -> dict | None:
     return d
 
 
-DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False}
+DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False, "attribution": "first"}
 
 
 def plan_summary(m: dict, plan: dict | None = None) -> dict:
@@ -157,6 +157,7 @@ class SettingsIn(BaseModel):
     auto_approve: bool | None = None
     affiliate_links: bool | None = None
     require_tax_form: bool | None = None
+    attribution: Literal["first", "last"] | None = None
     emails: dict[str, bool] | None = None
 
 
@@ -167,7 +168,7 @@ async def update_merchant(body: SettingsIn, m=Depends(current_merchant), db=Depe
         s["name"] = body.name.strip()
     if body.website is not None:
         s["website"] = str(body.website).rstrip("/")
-    for k in ("cookie_days", "auto_approve", "affiliate_links", "require_tax_form"):
+    for k in ("cookie_days", "auto_approve", "affiliate_links", "require_tax_form", "attribution"):
         if getattr(body, k) is not None:
             s[f"settings.{k}"] = getattr(body, k)
     for k, on in (body.emails or {}).items():
@@ -400,6 +401,7 @@ async def connect_stripe(body: StripeConnectIn, m=Depends(current_merchant), db=
     }
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"stripe": stripe}})
     await audit.record(db, m["_id"], "stripe.connected", m["_id"], account_id=stripe.get("account_id"), livemode=stripe.get("livemode"))
+    await stripe_sync.mark_merchant(db, m["_id"])
     return merchant_out({**m, "stripe": stripe})
 
 
@@ -454,6 +456,7 @@ async def stripe_oauth_finish(body: StripeOAuthIn, user=Depends(current_user), d
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"stripe": stripe}})
     audit.as_user(user)
     await audit.record(db, m["_id"], "stripe.connected", m["_id"], account_id=acct["id"], livemode=tok["livemode"], oauth=True)
+    await stripe_sync.mark_merchant(db, m["_id"])
     return merchant_out({**m, "stripe": stripe})
 
 

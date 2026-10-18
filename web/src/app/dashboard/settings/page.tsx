@@ -19,7 +19,7 @@ const EMAIL_KINDS: [string, string][] = [
 ];
 
 const PERMS = [
-  ["Customers", "Read"],
+  ["Customers", "Write"],
   ["Charges", "Read"],
   ["Invoices", "Read"],
   ["Checkout Sessions", "Read"],
@@ -142,6 +142,17 @@ stripe.customers.create({ email, metadata: { kr_ref: req.cookies.kr_ref } });`;
               <input type="checkbox" name="require_tax_form" defaultChecked={m.settings.require_tax_form} /> Require a signed W-9 or W-8 before an affiliate can be paid
             </label>
           </div>
+          <fieldset className="space-y-2 sm:col-span-2">
+            <legend className="mb-1 text-sm font-medium">When two affiliates refer the same person</legend>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="radio" name="attribution" value="first" className="mt-1" defaultChecked={m.settings.attribution !== "last"} />
+              <span><b>First touch.</b> <span className="text-muted">The first affiliate to bring someone in keeps them.</span></span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="radio" name="attribution" value="last" className="mt-1" defaultChecked={m.settings.attribution === "last"} />
+              <span><b>Last touch.</b> <span className="text-muted">A newer link click or code moves them to that affiliate, up to their first payment. After that they stay put.</span></span>
+            </label>
+          </fieldset>
           <div className="sm:col-span-2"><Submit>Save</Submit></div>
         </ActionForm>
       </Card>

@@ -38,6 +38,7 @@ EVENT_TYPES = [
     "affiliate.created",
     "affiliate.updated",
     "referral.created",
+    "referral.updated",
     "referral.converted",
     "commission.created",
     "commission.updated",
@@ -223,12 +224,17 @@ async def deliver_due(db: AsyncDatabase, now: datetime | None = None, limit: int
     return n
 
 
-async def run_dispatcher(db: AsyncDatabase, extra: Callable[[AsyncDatabase], Awaitable[None]] | None = None) -> None:
-    """Runs for the life of the app. Wakes on new work or every 15 seconds."""
+async def run_dispatcher(
+    db: AsyncDatabase, extra: Callable[[AsyncDatabase], Awaitable[None]] | None = None, each: Callable[[AsyncDatabase], Awaitable[object]] | None = None
+) -> None:
+    """Runs for the life of the app. Wakes on new work or every 15 seconds. `each` runs
+    on every pass, `extra` every 5 minutes."""
     last_extra = 0.0
     while True:
         try:
             await deliver_due(db)
+            if each:
+                await each(db)
             if extra and time.monotonic() - last_extra > 300:
                 last_extra = time.monotonic()
                 await extra(db)

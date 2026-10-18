@@ -38,6 +38,8 @@ class FakeMerchantStripe:
         self.invoice_pi: dict[str, str] = {}
         self.webhooks_deleted: list[str] = []
         self.customer_times: dict = {}
+        self.customer_metadata: dict[str, dict] = {}
+        self.fail_customers: dict[str, Exception] = {}
 
     async def account(self):
         return {"id": "acct_merchant", "name": "Acme"}
@@ -48,6 +50,11 @@ class FakeMerchantStripe:
 
     async def delete_webhook(self, endpoint_id):
         self.webhooks_deleted.append(endpoint_id)
+
+    async def update_customer_metadata(self, customer_id, metadata):
+        if customer_id in self.fail_customers:
+            raise self.fail_customers[customer_id]
+        self.customer_metadata[customer_id] = {**self.customer_metadata.get(customer_id, {}), **metadata}
 
     async def customer_created(self, customer_id):
         return self.customer_times.get(customer_id)

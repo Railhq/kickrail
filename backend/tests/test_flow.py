@@ -331,3 +331,66 @@ async def test_outbox_rows_commit_with_the_write(db):
     assert (await stripe_events.earn(db, m, referral, "inv:atomic", 5000, "usd", datetime.now(UTC), None)).startswith("commission")
     c = await db.commissions.find_one({"source_key": "inv:atomic"})
     assert await db.events.find_one({"type": "commission.created", "data.id": c["_id"]})
+
+
+async def test_referrer_is_written_onto_the_stripe_customer(db, fakes):
+    import stripe
+
+    from app.services.referrals import AttachInput, attach_referral
+    from app.services.stripe_sync import sync_customers
+
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    await attach_referral(db, m, AttachInput(token=S["token"], email="synced@example.com", stripe_customer_id="cus_synced"))
+    await attach_referral(db, m, AttachInput(token=S["token"], email="gone@example.com", stripe_customer_id="cus_gone"))
+    fakes["merchant"].fail_customers["cus_gone"] = stripe.InvalidRequestError("No such customer: 'cus_gone'", "id")
+    await sync_customers(db, lambda _m: fakes["merchant"])
+    r = await db.referrals.find_one({"stripe_customer_id": "cus_synced"})
+    assert fakes["merchant"].customer_metadata["cus_synced"] == {
+        "kickrail_referral": r["_id"], "kickrail_affiliate": S["aff_id"], "kickrail_affiliate_token": S["token"], "kickrail_campaign": r["campaign_id"],
+    }
+    assert "stripe_sync_due" not in r and r["stripe_synced_at"]
+    gone = await db.referrals.find_one({"stripe_customer_id": "cus_gone"})
+    assert "stripe_sync_due" not in gone and "No such customer" in gone["stripe_sync_error"]
+    # A network blip is retried later instead of dropped.
+    await attach_referral(db, m, AttachInput(token=S["token"], email="blip@example.com", stripe_customer_id="cus_blip"))
+    fakes["merchant"].fail_customers["cus_blip"] = TimeoutError("read timed out")
+    await sync_customers(db, lambda _m: fakes["merchant"])
+    blip = await db.referrals.find_one({"stripe_customer_id": "cus_blip"})
+    assert blip["stripe_sync_due"] and blip["stripe_sync_attempts"] == 1 and blip["stripe_sync_retry_at"]
+    del fakes["merchant"].fail_customers["cus_blip"]
+    await sync_customers(db, lambda _m: fakes["merchant"], now=blip["stripe_sync_retry_at"])
+    assert "cus_blip" in fakes["merchant"].customer_metadata
+
+
+async def test_last_touch_moves_an_unpaid_referral(client, db, fakes):
+    from app.services.referrals import AttachInput, attach_referral
+    from app.services.stripe_sync import sync_customers
+
+    other = await signup(client, "second@example.com", "Sam Second")
+    b = (await client.post("/programs/acme/join", json={}, headers=auth(other))).json()
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    first, _ = await attach_referral(db, m, AttachInput(token=S["token"], email="touch@example.com", stripe_customer_id="cus_touch"))
+    # First touch (the default): a later link doesn't take them.
+    again, _ = await attach_referral(db, m, AttachInput(token=b["token"], email="touch@example.com"))
+    assert again["affiliate_id"] == S["aff_id"]
+
+    r = await client.patch("/merchant", json={"attribution": "last"}, headers=auth(S["owner"]))
+    assert r.json()["settings"]["attribution"] == "last"
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    moved, created = await attach_referral(db, m, AttachInput(token=b["token"], email="touch@example.com"))
+    assert not created and moved["_id"] == first["_id"] and moved["affiliate_id"] == b["id"]
+    saved = await db.referrals.find_one({"_id": first["_id"]})
+    assert saved["affiliate_id"] == b["id"] and saved["previous_affiliates"][0]["affiliate_id"] == S["aff_id"]
+    ev = await db.events.find_one({"type": "referral.updated", "data.id": first["_id"]})
+    assert ev["data"]["affiliate_id"] == b["id"] and ev["data"]["previous_affiliate_id"] == S["aff_id"]
+    # The Stripe customer is updated to the new affiliate too.
+    await sync_customers(db, lambda _m: fakes["merchant"])
+    assert fakes["merchant"].customer_metadata["cus_touch"]["kickrail_affiliate"] == b["id"]
+    # No signal pointing anywhere new: it stays.
+    same, _ = await attach_referral(db, m, AttachInput(email="touch@example.com"))
+    assert same["affiliate_id"] == b["id"]
+    # Once they've paid, the referral is settled.
+    await db.referrals.update_one({"_id": first["_id"]}, {"$set": {"first_paid_at": datetime.now(UTC), "status": "customer"}})
+    kept, _ = await attach_referral(db, m, AttachInput(token=S["token"], email="touch@example.com"))
+    assert kept["affiliate_id"] == b["id"]
+    await client.patch("/merchant", json={"attribution": "first"}, headers=auth(S["owner"]))

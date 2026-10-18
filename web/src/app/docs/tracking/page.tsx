@@ -35,7 +35,7 @@ https://yourapp.com/blog/launch?ref=jane&utm_source=youtube`}</Snippet>
         head={["Behaviour", "Default", "Notes"]}
         rows={[
           ["Cookie lifetime", "60 days", <>Settings → Program → Cookie window (1 to 365 days). A return visit refreshes it.</>],
-          ["Two affiliates", "last click wins", <>Until the visitor signs up. After that the first affiliate keeps them: a later click from someone else does not take the customer.</>],
+          ["Two affiliates", "first touch", <>Before signup the last click wins. Once they sign up, the first affiliate keeps them. Switch Settings → Program to <b>last touch</b> and a newer link click or code moves them to that affiliate, until their first payment; after that they stay put. A move sends <C>referral.updated</C>.</>],
           ["Cookie flags", "SameSite=Lax", <>Plus <C>Secure</C> on https pages.</>],
         ]}
       />
@@ -74,6 +74,19 @@ stripe.customers.create({
   email,
   metadata: { kr_ref: req.cookies.kr_ref }, // kr_via (token) and kr_code (creator code) also work
 });`}</Snippet>
+
+      <H3>Who referred them, in Stripe</H3>
+      <P>Once a referral is tied to a Stripe customer, Kickrail writes the referrer onto that customer&apos;s metadata, so you can see it in the Stripe dashboard and read it in your own code. It is updated if the referral moves to another affiliate.</P>
+      <Fields
+        head={["Key", "Example", "Value"]}
+        rows={[
+          ["kickrail_referral", "ref_8Kd2...", "The referral id"],
+          ["kickrail_affiliate", "aff_3Xp9...", "The affiliate id"],
+          ["kickrail_affiliate_token", "jane", <>The affiliate&apos;s link token, the <C>jane</C> in <C>?via=jane</C></>],
+          ["kickrail_campaign", "cmp_Q7f1...", "The campaign id"],
+        ]}
+      />
+      <P>With a restricted key this needs Customers: <b>Write</b>. Keys made before this was added only have Read, so the metadata is skipped; everything else keeps working. Connecting with Stripe (OAuth) covers it.</P>
 
       <H2>The browser API</H2>
       <P>The script defines <C>window.Kickrail</C>:</P>

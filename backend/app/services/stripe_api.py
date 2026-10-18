@@ -50,6 +50,9 @@ class MerchantStripe:
     def for_account(cls, account_id: str) -> "MerchantStripe":
         return cls(get_settings().oauth_key, account_id)
 
+    async def update_customer_metadata(self, customer_id: str, metadata: dict) -> None:
+        await self.c.v1.customers.update_async(customer_id, {"metadata": metadata})
+
     async def customer_created(self, customer_id: str) -> datetime | None:
         c = await self.c.v1.customers.retrieve_async(customer_id)
         return datetime.fromtimestamp(c.created, UTC) if getattr(c, "created", None) else None

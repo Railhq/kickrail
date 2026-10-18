@@ -27,6 +27,7 @@ export default function Webhooks() {
           ["affiliate.created", "affiliate", "Someone joined, or you added them in the dashboard or API."],
           ["affiliate.updated", "affiliate", <>Approved, rejected or otherwise changed. Includes <C>previous_status</C>.</>],
           ["referral.created", "referral", "A new person was attributed to an affiliate."],
+          ["referral.updated", "referral", <>Under last-touch attribution, the person moved to another affiliate before paying. Includes <C>previous_affiliate_id</C>.</>],
           ["referral.converted", "referral", <>That person made their first payment (<C>status</C> is now <C>customer</C>).</>],
           ["commission.created", "commission", "An affiliate earned a commission or lead bounty, or a clawback was added after a refund."],
           ["commission.updated", "commission", "A refund shrank or voided it, you released it from review, or you rejected its referral."],

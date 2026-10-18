@@ -95,6 +95,7 @@ export async function updateSettings(_: State, f: FormData): Promise<State> {
         auto_approve: f.get("auto_approve") === "on",
         affiliate_links: f.get("affiliate_links") === "on",
         require_tax_form: f.get("require_tax_form") === "on",
+        attribution: f.get("attribution") === "last" ? "last" : "first",
       },
     }),
   );
