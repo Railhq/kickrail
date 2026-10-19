@@ -83,7 +83,9 @@ async def resolve_affiliate(db: AsyncDatabase, merchant_id: str, inp: AttachInpu
         if aff:
             return aff, "link", None
     if inp.promotion_code_id:
-        aff = await _by_field(db, merchant_id, "stripe_promotion_code_id", inp.promotion_code_id, db.affiliate_codes, True)
+        aff = await _by_field(db, merchant_id, "stripe_promotion_code_id", inp.promotion_code_id, db.affiliate_codes, True) or await _by_field(
+            db, merchant_id, "stripe_retired_promotion_code_ids", inp.promotion_code_id, db.affiliate_codes, True
+        )
         if aff:
             return aff, "code", None
     if inp.code:

@@ -38,6 +38,7 @@ class MerchantApi(Protocol):
         return inv.to_dict()
 
     async def create_promotion_code(self, coupon_id: str, code: str, affiliate_id: str) -> str: ...
+    async def deactivate_promotion_code(self, promotion_code_id: str) -> None: ...
     async def update_customer_metadata(self, customer_id: str, metadata: dict) -> None: ...
     async def invoice(self, invoice_id: str) -> dict: ...
 
@@ -105,6 +106,9 @@ class MerchantStripe:
             {"promotion": {"type": "coupon", "coupon": coupon_id}, "code": code, "metadata": {"kr_affiliate": affiliate_id}}
         )
         return pc.id
+
+    async def deactivate_promotion_code(self, promotion_code_id: str) -> None:
+        await self.c.v1.promotion_codes.update_async(promotion_code_id, {"active": False})
 
     async def checkout_lines(self, session_id: str):
         page = await self.c.v1.checkout.sessions.line_items.list_async(session_id, {"limit": 100})

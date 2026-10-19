@@ -612,19 +612,18 @@ async def create_campaign(body: CampaignIn, m=Depends(current_merchant), db=Depe
 @router.put("/campaigns/{campaign_id}")
 async def update_campaign(campaign_id: str, body: CampaignIn, m=Depends(current_merchant), db=Depends(db_dep), factory=Depends(merchant_api_factory)):
     # Changes apply to future commissions only; earned ones keep their amounts.
-    new_coupon = False
-    if body.stripe_coupon_id:
-        before = await db.campaigns.find_one({"_id": campaign_id, "merchant_id": m["_id"]}, {"stripe_coupon_id": 1}) or {}
-        new_coupon = before.get("stripe_coupon_id") != body.stripe_coupon_id
-        if new_coupon:
-            plans.require(m, "creator_codes")
+    before = await db.campaigns.find_one({"_id": campaign_id, "merchant_id": m["_id"]}, {"stripe_coupon_id": 1}) or {}
+    new_coupon = (before.get("stripe_coupon_id") or None) != (body.stripe_coupon_id or None)
+    if new_coupon and body.stripe_coupon_id:
+        plans.require(m, "creator_codes")
     try:
         res = await db.campaigns.find_one_and_update({"_id": campaign_id, "merchant_id": m["_id"]}, {"$set": _campaign_fields(body, m)}, return_document=True)
     except DuplicateKeyError:
         raise HTTPException(409, "another campaign already uses that join page name")
     if not res:
         raise HTTPException(404, "campaign not found")
-    warning = await sync_campaign_codes(db, m, campaign_id, factory) if new_coupon else None
+    # A swapped or removed coupon switches off the old promotion codes.
+    warning = await sync_campaign_codes(db, m, campaign_id, factory, replace=bool(before.get("stripe_coupon_id"))) if new_coupon else None
     return {**campaign_out(res, m), "warning": warning}
 
 
