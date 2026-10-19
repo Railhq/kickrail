@@ -20,6 +20,9 @@ export default async function Signup({ searchParams }: { searchParams: Promise<{
         <Field label="Email"><input className="input" name="email" type="email" autoComplete="email" required /></Field>
         <Field label="Password" hint="At least 8 characters."><input className="input" name="password" type="password" minLength={8} autoComplete="new-password" required /></Field>
         <Submit className="w-full">Create account</Submit>
+        <p className="text-center text-xs text-muted">
+          By creating an account you agree to the <Link className="link" href="/terms">terms</Link> and <Link className="link" href="/privacy">privacy policy</Link>.
+        </p>
       </ActionForm>
       <p className="mt-6 text-center text-sm text-muted">
         Have an account? <Link className="link" href={`/login${next ? `?next=${encodeURIComponent(next)}` : ""}`}>Sign in</Link>

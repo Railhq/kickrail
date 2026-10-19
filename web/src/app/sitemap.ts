@@ -6,6 +6,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: SITE, changeFrequency: "weekly", priority: 1 },
     { url: `${SITE}/signup`, changeFrequency: "monthly" },
+    { url: `${SITE}/terms`, changeFrequency: "yearly" },
+    { url: `${SITE}/privacy`, changeFrequency: "yearly" },
     ...docs.map((href) => ({ url: `${SITE}${href}`, changeFrequency: "monthly" as const })),
   ];
 }

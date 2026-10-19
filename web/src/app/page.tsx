@@ -133,6 +133,8 @@ export default function Landing() {
           <Link href="/docs/switching" className="hover:text-fg">Switching from Rewardful</Link>
           <Link href="/docs/mcp" className="hover:text-fg">MCP server</Link>
           <a href="/blog/rewardful-alternatives" className="hover:text-fg">Rewardful alternatives</a>
+          <Link href="/terms" className="hover:text-fg">Terms</Link>
+          <Link href="/privacy" className="hover:text-fg">Privacy</Link>
         </div>
       </footer>
     </div>
