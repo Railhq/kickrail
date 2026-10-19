@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { H2, List, P, Title } from "../../docs/ui";
-import { CONTACT_EMAIL, UPDATED } from "@/lib/legal";
+import { CONTACT_EMAIL, SUPPORT_EMAIL, UPDATED } from "@/lib/legal";
 
 export const metadata: Metadata = {
   title: "Terms of service",
@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 };
 
 const mail = <a href={`mailto:${CONTACT_EMAIL}`} className="underline">{CONTACT_EMAIL}</a>;
+const support = <a href={`mailto:${SUPPORT_EMAIL}`} className="underline">{SUPPORT_EMAIL}</a>;
 
 export default function Terms() {
   return (
@@ -34,7 +35,7 @@ export default function Terms() {
       <H2>Accounts</H2>
       <List>
         <li>Give accurate information and keep your password and API keys safe. You are responsible for what happens under your account.</li>
-        <li>Tell us at {mail} if you think someone else has access to your account.</li>
+        <li>Tell us at {support} if you think someone else has access to your account.</li>
         <li>You must be at least 16, and old enough to form a contract where you live.</li>
       </List>
 
@@ -106,7 +107,7 @@ export default function Terms() {
       <P>These terms are governed by the laws of the United States of America.</P>
 
       <H2>Contact</H2>
-      <P>{mail}</P>
+      <P>Questions about these terms or your data: {mail}. Help with your account: {support}.</P>
     </>
   );
 }
