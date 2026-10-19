@@ -133,6 +133,9 @@ async def earn(
 ) -> str:
     if await db.commissions.find_one({"merchant_id": merchant["_id"], "source_key": source_key}):
         return "already earned"
+    # A commission the merchant deleted stays deleted, even if Stripe sends the payment again.
+    if await db.deleted_records.find_one({"merchant_id": merchant["_id"], "source_key": source_key}):
+        return "no commission: deleted by merchant"
     campaign = await db.campaigns.find_one({"_id": referral["campaign_id"]})
     if not campaign:
         return "campaign missing"
@@ -149,6 +152,8 @@ async def earn(
 
     if referral.get("test"):
         return "no commission: test referral"
+    if referral.get("rejected"):
+        return "no commission: referral rejected"
     # Lead bounties are paid for the signup, so they don't use up a one-time sale commission.
     prior = await db.commissions.count_documents({"referral_id": referral["_id"], "status": {"$ne": "void"}, "amount_cents": {"$gt": 0}, "kind": {"$ne": "lead"}})
     d = decide_commission(campaign, base_cents, currency, paid_at, first_paid_at, prior, affiliate, lines)

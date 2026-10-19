@@ -122,6 +122,7 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
             ([("affiliate_id", A)], {}),
         ],
         "events": [([("merchant_id", A), ("created_at", D)], {})],
+        "deleted_records": [([("merchant_id", A), ("source_key", A)], {"partialFilterExpression": {"source_key": {"$type": "string"}}}), ([("merchant_id", A), ("deleted_at", D)], {})],
         "audit_log": [([("merchant_id", A), ("created_at", D)], {}), ([("merchant_id", A), ("target", A), ("created_at", D)], {})],
         # Every Stripe event Kickrail received, for 90 days: history, and a skip for ones already handled.
         "stripe_events": [

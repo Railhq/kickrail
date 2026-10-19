@@ -24,7 +24,7 @@ from ..security import MAX_PROGRAMS, can_be_paid, current_merchant, current_user
 from ..serializers import affiliate_url, code_obj, join_url, link_obj, portal_base
 from ..services import audit, notify
 from ..services import payouts as payout_svc
-from ..services import rewardful_import, stripe_sync
+from ..services import deletion, rewardful_import, stripe_sync
 from ..services.exports import EXPORTS
 from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, sync_promotion_code
 from ..services.notify import EMAIL_KINDS
@@ -871,6 +871,37 @@ async def reject_referral(referral_id: str, m=Depends(current_merchant), db=Depe
 
     if not await run_in_transaction(db, reject):
         raise HTTPException(404, "referral not found")
+    return {"ok": True}
+
+
+class DeleteIn(BaseModel):
+    reason: str | None = Field(None, max_length=300)
+
+
+@router.delete("/referrals/{referral_id}")
+async def delete_referral(referral_id: str, body: DeleteIn | None = None, m=Depends(current_merchant), db=Depends(db_dep), factory=Depends(merchant_api_factory)):
+    try:
+        r, commissions = await deletion.delete_referral(db, m["_id"], referral_id, body.reason if body else None)
+    except deletion.NotFound:
+        raise HTTPException(404, "referral not found")
+    except deletion.Blocked as e:
+        raise HTTPException(409, str(e))
+    if r.get("stripe_customer_id") and m.get("stripe"):
+        try:  # don't leave the Stripe customer pointing at a referral that's gone
+            await factory(m).update_customer_metadata(r["stripe_customer_id"], {k: "" for k in stripe_sync.customer_metadata(r, None)})
+        except Exception:
+            log.warning("clearing customer metadata failed for %s", r["_id"], exc_info=True)
+    return {"ok": True, "commissions_deleted": len(commissions)}
+
+
+@router.delete("/commissions/{commission_id}")
+async def delete_commission(commission_id: str, body: DeleteIn | None = None, m=Depends(current_merchant), db=Depends(db_dep)):
+    try:
+        await deletion.delete_commission(db, m["_id"], commission_id, body.reason if body else None)
+    except deletion.NotFound:
+        raise HTTPException(404, "commission not found")
+    except deletion.Blocked as e:
+        raise HTTPException(409, str(e))
     return {"ok": True}
 
 

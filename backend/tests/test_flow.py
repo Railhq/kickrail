@@ -394,3 +394,56 @@ async def test_last_touch_moves_an_unpaid_referral(client, db, fakes):
     kept, _ = await attach_referral(db, m, AttachInput(token=S["token"], email="touch@example.com"))
     assert kept["affiliate_id"] == b["id"]
     await client.patch("/merchant", json={"attribution": "first"}, headers=auth(S["owner"]))
+
+
+async def test_rejected_referral_never_earns_again(client, db):
+    r = await client.post("/v1/referrals", json={"via": S["token"], "email": "Creator+again@YouTube.example", "stripe_customer_id": "cus_rej"}, headers=auth(S["sk"]))
+    rid = r.json()["referral"]["id"]
+    paid = int(time.time())
+    inv = {"customer": "cus_rej", "amount_paid": 10000, "currency": "usd", "status_transitions": {"paid_at": paid}}
+    assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_rej1"})).json()["outcome"] == "commission 3000 usd"
+    await client.post(f"/merchant/referrals/{rid}/reject", headers=auth(S["owner"]))
+    assert (await db.commissions.find_one({"source_key": "inv:in_rej1"}))["status"] == "void"
+    # The renewal used to earn an unheld commission, because rejecting also clears the flags.
+    assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_rej2"})).json()["outcome"] == "no commission: referral rejected"
+    assert not await db.commissions.find_one({"source_key": "inv:in_rej2"})
+
+
+async def test_deleting_commissions_and_referrals_is_audited(client, db, fakes):
+    r = await client.post("/v1/referrals", json={"via": S["token"], "email": "delete-me@example.com", "stripe_customer_id": "cus_del"}, headers=auth(S["sk"]))
+    rid = r.json()["referral"]["id"]
+    paid = int(time.time())
+    inv = {"customer": "cus_del", "amount_paid": 10000, "currency": "usd", "status_transitions": {"paid_at": paid}}
+    await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_del1"})
+    c = await db.commissions.find_one({"source_key": "inv:in_del1"})
+
+    r = await client.request("DELETE", f"/merchant/commissions/{c['_id']}", json={"reason": "duplicate order"}, headers=auth(S["owner"]))
+    assert r.status_code == 200, r.text
+    assert not await db.commissions.find_one({"_id": c["_id"]})
+    kept = await db.deleted_records.find_one({"record_id": c["_id"]})
+    assert kept["doc"]["amount_cents"] == 3000 and kept["reason"] == "duplicate order" and kept["actor"]["kind"] == "user"
+    row = await db.audit_log.find_one({"action": "commission.deleted", "target": c["_id"]})
+    assert row["detail"]["amount_cents"] == 3000 and row["detail"]["reason"] == "duplicate order" and row["actor"]["kind"] == "user"
+    assert await db.events.find_one({"type": "commission.deleted", "data.id": c["_id"]})
+    # Stripe sending the same payment again doesn't bring it back; a new payment still earns.
+    assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_del1"})).json()["outcome"] == "no commission: deleted by merchant"
+    assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_del2"})).json()["outcome"] == "commission 3000 usd"
+
+    # Anything paid or in a payout blocks the delete.
+    await db.commissions.update_one({"source_key": "inv:in_del2"}, {"$set": {"payout_id": "po_x"}})
+    assert (await client.delete(f"/merchant/referrals/{rid}", headers=auth(S["owner"]))).status_code == 409
+    c2 = await db.commissions.find_one({"source_key": "inv:in_del2"})
+    assert (await client.delete(f"/merchant/commissions/{c2['_id']}", headers=auth(S["owner"]))).status_code == 409
+    await db.commissions.update_one({"_id": c2["_id"]}, {"$unset": {"payout_id": ""}})
+
+    fakes["merchant"].customer_metadata["cus_del"] = {"kickrail_referral": rid}
+    r = await client.delete(f"/merchant/referrals/{rid}", headers=auth(S["owner"]))
+    assert r.json() == {"ok": True, "commissions_deleted": 1}
+    assert not await db.referrals.find_one({"_id": rid}) and not await db.commissions.find_one({"_id": c2["_id"]})
+    row = await db.audit_log.find_one({"action": "referral.deleted", "target": rid})
+    assert row["detail"]["commissions_deleted"] == [c2["_id"]] and row["detail"]["email"] == "delete-me@example.com"
+    assert await db.deleted_records.count_documents({"merchant_id": S["merchant_id"], "kind": "referral", "record_id": rid}) == 1
+    assert await db.events.find_one({"type": "referral.deleted", "data.id": rid})
+    assert fakes["merchant"].customer_metadata["cus_del"]["kickrail_referral"] == ""
+    # Another merchant's id, or one already gone, is a 404.
+    assert (await client.delete(f"/merchant/referrals/{rid}", headers=auth(S["owner"]))).status_code == 404

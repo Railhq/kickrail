@@ -1,3 +1,4 @@
+import { DeleteButton } from "@/components/DeleteButton";
 import { Badge, Card, Empty, StatusBadge, Table } from "@/components/ui";
 import { api } from "@/lib/backend";
 import { date, money, relative } from "@/lib/format";
@@ -20,12 +21,12 @@ export default async function CommissionsPage() {
         <h1 className="page-title">Commissions</h1>
         <a className="btn btn-secondary" href="/api/merchant/export/commissions.csv" download>Export CSV</a>
       </div>
-      <p className="text-sm text-muted">Refunds and disputes shrink or void unpaid commissions automatically. If the commission was already paid, a negative line is netted from that affiliate&apos;s next payout.</p>
+      <p className="text-sm text-muted">Refunds and disputes shrink or void unpaid commissions automatically. If the commission was already paid, a negative line is netted from that affiliate&apos;s next payout. You can delete an unpaid commission that isn&apos;t in a payout; every delete is recorded in the audit log.</p>
       <Card>
         {rows.length === 0 ? (
           <Empty>No commissions yet. They are created when a referred customer pays.</Empty>
         ) : (
-          <Table head={["Affiliate", "Amount", "On payment", "Status", "Payable", "Source"]}>
+          <Table head={["Affiliate", "Amount", "On payment", "Status", "Payable", "Source", ""]}>
             {rows.map((c) => (
               <tr key={c.id}>
                 <td className="px-5 py-3">{c.affiliate_name}</td>
@@ -39,6 +40,9 @@ export default async function CommissionsPage() {
                 </td>
                 <td className="px-5 py-3 text-muted">{c.status === "pending" ? (new Date(c.due_at) > new Date() ? relative(c.due_at) : "now") : c.status === "paid" ? "paid" : ""}</td>
                 <td className="px-5 py-3 text-muted">{source(c.source_key)}<p className="text-xs">{date(c.created_at)}</p></td>
+                <td className="px-5 py-3 text-right">
+                  {c.status !== "paid" && !c.payout_id && <DeleteButton kind="commissions" id={c.id} confirmText={`Delete this ${money(c.amount_cents, c.currency)} commission for ${c.affiliate_name}? It's kept in your audit log, and the same payment won't earn it again. Add a reason (optional):`} />}
+                </td>
               </tr>
             ))}
           </Table>

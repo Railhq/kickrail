@@ -296,6 +296,12 @@ export async function reviewReferral(id: string, verdict: "clear" | "reject") {
   revalidatePath("/dashboard", "layout");
 }
 
+export async function deleteRecord(kind: "referrals" | "commissions", id: string, reason: string): Promise<State> {
+  const r = await attempt(() => api(`/merchant/${kind}/${id}`, { method: "DELETE", body: { reason: reason.trim() || null } }));
+  revalidatePath("/dashboard", "layout");
+  return r.error ? { error: r.error } : { ok: "Deleted" };
+}
+
 // ---------- team ----------
 
 export async function inviteMember(_: State, f: FormData): Promise<State> {
