@@ -44,7 +44,9 @@ class FakeMerchantStripe:
         self.invoices: dict[str, dict] = {}
 
     async def account(self):
-        return {"id": "acct_merchant", "name": "Acme"}
+        # Each restricted key is its own Stripe account, as for real merchants.
+        key = getattr(self, "key", None) or "acct_merchant"
+        return {"id": key if key.startswith("acct_") else f"acct_{key}", "name": "Acme"}
 
     async def create_webhook(self, url):
         self.webhook_url = url
@@ -129,7 +131,10 @@ def fakes():
 @pytest.fixture(scope="session", autouse=True)
 async def setup_app(fakes):
     app.dependency_overrides[deps.merchant_api_factory] = lambda: (lambda m: fakes["merchant"])
-    app.dependency_overrides[deps.merchant_key_client] = lambda: (lambda key: fakes["merchant"])
+    def key_client(key):
+        fakes["merchant"].key = key
+        return fakes["merchant"]
+    app.dependency_overrides[deps.merchant_key_client] = lambda: key_client
     app.dependency_overrides[deps.platform_api] = lambda: fakes["platform"]
     # merchant.create_payout calls platform_api() directly (not as a dependency)
     import app.routers.merchant as mr

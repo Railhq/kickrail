@@ -377,11 +377,29 @@ class StripeConnectIn(BaseModel):
     restricted_key: str = Field(pattern=r"^(rk|sk)_(test|live)_[A-Za-z0-9]+$")
 
 
+async def _one_program_per_account(db, m: dict, account_id: str, livemode: bool, oauth: bool = False) -> None:
+    """Two programs on one live Stripe account would both receive every sale and fight
+    over the same promotion codes; test programs may share a sandbox. One-click
+    connections can never share, because their events are routed by account."""
+    clashes = ([{"stripe.livemode": True}] if livemode else []) + ([{"stripe.oauth": True}] if oauth else [])
+    if not clashes:
+        return
+    other = await db.merchants.find_one({"_id": {"$ne": m["_id"]}, "stripe.account_id": account_id, "$or": clashes}, {"name": 1})
+    if other:
+        raise HTTPException(409, f"That Stripe account is already connected to {other['name']}. Disconnect it there first, or sell both products from one program with product rules.")
+
+
 @router.post("/stripe")
 async def connect_stripe(body: StripeConnectIn, m=Depends(current_merchant), db=Depends(db_dep), make=Depends(merchant_key_client), factory=Depends(merchant_api_factory)):
     api = make(body.restricted_key)
+    livemode = "_live_" in body.restricted_key
     try:
         acct = await api.account()
+    except Exception as e:
+        log.warning("stripe connect failed for %s: %s", m["_id"], e)
+        raise HTTPException(400, f"Stripe rejected the key: {getattr(e, 'user_message', None) or e}")
+    await _one_program_per_account(db, m, acct["id"], livemode)
+    try:
         if get_settings().dev_webhook_secret:
             endpoint_id, webhook_secret = None, get_settings().dev_webhook_secret
         else:
@@ -393,7 +411,7 @@ async def connect_stripe(body: StripeConnectIn, m=Depends(current_merchant), db=
     stripe = {
         "account_id": acct["id"],
         "account_name": acct["name"],
-        "livemode": "_live_" in body.restricted_key,
+        "livemode": livemode,
         "key_enc": encrypt(body.restricted_key),
         "webhook_endpoint_id": endpoint_id,
         "webhook_secret_enc": encrypt(webhook_secret),
@@ -448,9 +466,7 @@ async def stripe_oauth_finish(body: StripeOAuthIn, user=Depends(current_user), d
     except Exception as e:
         log.warning("stripe oauth failed for %s: %s", m["_id"], e)
         raise HTTPException(400, f"Stripe didn't accept the connection: {getattr(e, 'user_message', None) or e}")
-    other = await db.merchants.find_one({"_id": {"$ne": m["_id"]}, "stripe.account_id": acct["id"], "stripe.oauth": True}, {"name": 1})
-    if other:
-        raise HTTPException(409, f"That Stripe account is already connected to {other['name']}. Disconnect it there first.")
+    await _one_program_per_account(db, m, acct["id"], tok["livemode"], oauth=True)
     await _drop_old_webhook(m, factory)
     stripe = {"oauth": True, "account_id": acct["id"], "account_name": acct["name"], "livemode": tok["livemode"], "connected_at": datetime.now(UTC)}
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"stripe": stripe}})
