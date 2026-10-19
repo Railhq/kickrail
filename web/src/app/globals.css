@@ -59,6 +59,9 @@ input[type="radio"] {
   .btn {
     @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60;
   }
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
   .btn-primary {
     @apply bg-ink text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] hover:bg-ink-2;
   }

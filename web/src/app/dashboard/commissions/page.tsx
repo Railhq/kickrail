@@ -6,9 +6,12 @@ import type { Commission } from "@/lib/types";
 
 export const metadata = { title: "Commissions" };
 
+// Stripe ids run to 60+ characters; show the start and keep the full id on hover.
+const stripeId = (id: string) => <span className="block max-w-44 truncate font-mono text-xs" title={id}>{id}</span>;
+
 function source(key: string) {
-  if (key.startsWith("inv:")) return <span className="font-mono text-xs">{key.slice(4)}</span>;
-  if (key.startsWith("cs:")) return <span className="font-mono text-xs">{key.slice(3)}</span>;
+  if (key.startsWith("inv:")) return stripeId(key.slice(4));
+  if (key.startsWith("cs:")) return stripeId(key.slice(3));
   if (key.startsWith("clawback:")) return <span className="text-xs">refund after payout</span>;
   return key;
 }

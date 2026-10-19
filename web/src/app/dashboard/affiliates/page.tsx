@@ -42,22 +42,22 @@ export default async function AffiliatesPage() {
         {affs.length === 0 ? (
           <Empty>No affiliates yet. Share your program page from the Overview.</Empty>
         ) : (
-          <Table head={["Affiliate", "Status", "Link / code", "Clicks", "Signups", "Customers", "Earned", ""]}>
+          <Table compact head={["Affiliate", "Status", "Link / code", "Clicks", "Signups", "Customers", "Earned", ""]}>
             {affs.map((a) => (
               <tr key={a.id} className="align-top">
-                <td className="px-5 py-3">
+                <td className="px-3 py-3 first:pl-5 last:pr-5">
                   <Link href={`/dashboard/affiliates/${a.id}`} className="font-medium hover:underline">{a.name || a.email}</Link>
                   <p className="text-xs text-muted">{a.email}</p>
                   <p className="mt-1 text-xs text-muted">Joined {date(a.created_at)} · {campaignName[a.campaign_id]}</p>
                   {a.rate_override_description && <p className="mt-1 text-xs text-amber-800">Custom rate: {a.rate_override_description}</p>}
                 </td>
-                <td className="px-5 py-3">
+                <td className="px-3 py-3 first:pl-5 last:pr-5">
                   <StatusBadge status={a.status} />
                   {!a.can_be_paid && a.status === "approved" && <p className="mt-1 text-xs text-muted">no payout details yet</p>}
                   {a.tax_form && <p className="mt-1 text-xs text-muted">{a.tax_form === "w9" ? "W-9" : a.tax_form === "w8ben" ? "W-8BEN" : "W-8BEN-E"} on file</p>}
                 </td>
-                <td className="px-5 py-3">
-                  <p className="font-mono text-xs">?{new URL(a.link).search.slice(1)}</p>
+                <td className="px-3 py-3 first:pl-5 last:pr-5">
+                  <p className="whitespace-nowrap font-mono text-xs">?{new URL(a.link).search.slice(1)}</p>
                   {a.code && (
                     <p className="mt-1">
                       <Badge tone={a.stripe_promotion_code === a.code ? "green" : "gray"}>{a.code}</Badge>
@@ -70,25 +70,25 @@ export default async function AffiliatesPage() {
                     </p>
                   )}
                 </td>
-                <td className="px-5 py-3 num">{a.clicks}</td>
-                <td className="px-5 py-3 num">{a.leads}</td>
-                <td className="px-5 py-3 num">{a.customers}</td>
-                <td className="px-5 py-3 num">
+                <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.clicks}</td>
+                <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.leads}</td>
+                <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.customers}</td>
+                <td className="px-3 py-3 first:pl-5 last:pr-5 num">
                   {money(a.earned_cents)}
-                  <p className="text-xs text-muted">{money(a.paid_cents)} paid</p>
+                  <p className="whitespace-nowrap text-xs text-muted">{money(a.paid_cents)} paid</p>
                 </td>
-                <td className="px-5 py-3">
-                  <div className="flex flex-col items-end gap-2">
-                    <Link href={`/dashboard/affiliates/${a.id}`} className="btn btn-secondary whitespace-nowrap">View as</Link>
+                <td className="px-3 py-3 first:pl-5 last:pr-5">
+                  <div className="flex w-24 flex-col items-stretch gap-1.5">
+                    <Link href={`/dashboard/affiliates/${a.id}`} className="btn btn-secondary btn-sm whitespace-nowrap">View as</Link>
                     {a.status !== "approved" && (
-                      <form action={setAffiliateStatus.bind(null, a.id, "approved")}><button className="btn btn-primary">Approve</button></form>
+                      <form action={setAffiliateStatus.bind(null, a.id, "approved")}><button className="btn btn-primary btn-sm w-full">Approve</button></form>
                     )}
                     {a.status !== "rejected" && (
-                      <form action={setAffiliateStatus.bind(null, a.id, "rejected")}><button className="btn btn-danger">{a.status === "pending" ? "Decline" : "Remove"}</button></form>
+                      <form action={setAffiliateStatus.bind(null, a.id, "rejected")}><button className="btn btn-danger btn-sm w-full">{a.status === "pending" ? "Decline" : "Remove"}</button></form>
                     )}
-                    <details className="text-right">
+                    <details className="relative text-center">
                       <summary className="cursor-pointer text-xs text-muted">Edit</summary>
-                      <ActionForm action={updateAffiliate} className="mt-2 w-56 space-y-2 text-left">
+                      <ActionForm action={updateAffiliate} className="absolute right-0 z-20 mt-2 w-56 space-y-2 rounded-xl border border-line bg-surface p-3 text-left shadow-lg">
                         <input type="hidden" name="id" value={a.id} />
                         <select name="campaign_id" defaultValue={a.campaign_id} className="input">
                           {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
