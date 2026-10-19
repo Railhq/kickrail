@@ -59,6 +59,8 @@ export async function middleware(req: NextRequest) {
   if (!host || OWN_HOSTS.has(host) || pathname.startsWith("/api/")) return next();
   const slug = await slugFor(host);
   if (!slug) return next();
+  // Kickrail's blog is proxied in next.config; it doesn't belong on a merchant's domain.
+  if (pathname === "/blog" || pathname.startsWith("/blog/")) return new NextResponse("Not found", { status: 404 });
   // The merchant dashboard stays on Kickrail's own domain.
   if (pathname === "/" || pathname === "/join" || pathname.startsWith("/dashboard") || pathname.startsWith("/onboarding")) {
     return NextResponse.rewrite(new URL(`/join/${slug}`, req.url), { request: { headers } });

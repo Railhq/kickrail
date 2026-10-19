@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.kickrail/kickrail",
+  "title": "Kickrail",
+  "description": "Set up and run a Stripe affiliate program: tracking, campaigns, affiliates, codes, Rewardful import.",
+  "websiteUrl": "https://kickrail.com/docs/mcp",
+  "version": "1.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://kickrail.com/api/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer followed by your program's server key from Kickrail Settings (starts with sk_kr_)",
+          "isRequired": true,
+          "isSecret": true,
+          "value": "Bearer {server_key}",
+          "variables": {
+            "server_key": { "description": "Server API key, starts with sk_kr_", "isRequired": true, "isSecret": true }
+          }
+        }
+      ]
+    }
+  ]
+}

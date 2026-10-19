@@ -173,7 +173,9 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
       </Card>
       {d.program.powered_by && (
         <p className="text-center text-xs text-muted">
-          Powered by <a className="underline" href="https://kickrail.com" target="_blank" rel="noopener">Kickrail</a>
+          Powered by <a className="underline" href="https://kickrail.com/?utm_source=powered_by&utm_medium=portal" target="_blank" rel="noopener">Kickrail</a>
+          {" · "}
+          <a className="underline" href="https://kickrail.com/signup?utm_source=powered_by&utm_medium=portal" target="_blank" rel="noopener">Run your own affiliate program</a>
         </p>
       )}
     </div>
