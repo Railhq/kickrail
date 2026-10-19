@@ -94,6 +94,7 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
             ([("merchant_id", A), ("code", A)], {"unique": True, "partialFilterExpression": {"code": {"$type": "string"}}}),
             ([("merchant_id", A), ("user_id", A)], {"unique": True}),
             ([("merchant_id", A), ("stripe_promotion_code_id", A)], {"sparse": True}),
+            ([("merchant_id", A), ("stripe_retired_promotion_code_ids", A)], {"sparse": True}),
             ([("user_id", A)], {}),
         ],
         "clicks": [([("merchant_id", A), ("affiliate_id", A), ("created_at", D)], {})],
@@ -119,6 +120,7 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
         "affiliate_codes": [
             ([("merchant_id", A), ("code", A)], {"unique": True}),
             ([("merchant_id", A), ("stripe_promotion_code_id", A)], {"sparse": True}),
+            ([("merchant_id", A), ("stripe_retired_promotion_code_ids", A)], {"sparse": True}),
             ([("affiliate_id", A)], {}),
         ],
         "events": [([("merchant_id", A), ("created_at", D)], {})],

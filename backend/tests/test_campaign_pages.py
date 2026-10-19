@@ -80,3 +80,37 @@ async def test_adding_a_coupon_makes_existing_codes_redeemable(client, db, prog,
     n = len(fakes["merchant"].promotion_codes)
     await client.put(f"/merchant/campaigns/{c['id']}", json={**CAMP, "name": "Creators", "stripe_coupon_id": "coupon_15"}, headers=h)
     assert len(fakes["merchant"].promotion_codes) == n
+
+
+async def test_swapping_the_coupon_moves_codes_and_old_codes_still_attribute(client, db, prog, fakes):
+    h = auth(prog["token"])
+    assert (await client.post("/merchant/stripe", json={"restricted_key": "rk_test_pageco"}, headers=h)).status_code == 200
+    c = (await client.post("/merchant/campaigns", json={**CAMP, "name": "Creators", "stripe_coupon_id": "coupon_15"}, headers=h)).json()
+    dog = await signup(client, db, "dog@pages.example", "Dog")
+    a = (await client.post("/programs/pageco/join", json={}, headers=auth(dog))).json()
+    await client.patch(f"/merchant/affiliates/{a['id']}", json={"campaign_id": c["id"], "status": "approved", "code": "dogcast"}, headers=h)
+    await client.post(f"/merchant/affiliates/{a['id']}/codes", json={"code": "dogpod"}, headers=h)
+    fake = fakes["merchant"]
+    def dog_codes():
+        return {k for k, v in fake.active_codes.items() if v.startswith("DOG")}
+    assert dog_codes() == {"promo_DOGCAST", "promo_DOGPOD"}
+
+    r = await client.put(f"/merchant/campaigns/{c['id']}", json={**CAMP, "name": "Creators", "stripe_coupon_id": "coupon_25"}, headers=h)
+    assert r.status_code == 200 and r.json()["warning"] is None
+    # Old codes are off, the same strings now live on the new coupon.
+    assert dog_codes() == {"promo_DOGCAST_2", "promo_DOGPOD_2"}
+    assert {("coupon_25", "DOGCAST"), ("coupon_25", "DOGPOD")} <= set(fake.promotion_codes)
+    aff = await db.affiliates.find_one({"_id": a["id"]})
+    assert aff["stripe_promotion_code_id"] == "promo_DOGCAST_2" and aff["stripe_retired_promotion_code_ids"] == ["promo_DOGCAST"]
+
+    # A checkout started with an old code before the swap still credits Dog.
+    from app.services.referrals import AttachInput, resolve_affiliate
+    for old in ("promo_DOGCAST", "promo_DOGPOD"):
+        found = await resolve_affiliate(db, prog["id"], AttachInput(promotion_code_id=old))
+        assert found and found[0]["_id"] == a["id"] and found[1] == "code"
+
+    # Removing the coupon switches the codes off; the codes themselves stay.
+    r = await client.put(f"/merchant/campaigns/{c['id']}", json={**CAMP, "name": "Creators", "stripe_coupon_id": None}, headers=h)
+    assert r.status_code == 200 and dog_codes() == set()
+    aff = await db.affiliates.find_one({"_id": a["id"]})
+    assert aff["code"] == "DOGCAST" and not aff.get("stripe_promotion_code_id")

@@ -35,6 +35,7 @@ class FakeMerchantStripe:
 
     def __init__(self):
         self.promotion_codes: list[tuple[str, str]] = []
+        self.active_codes: dict[str, str] = {}
         self.invoice_pi: dict[str, str] = {}
         self.webhooks_deleted: list[str] = []
         self.customer_times: dict = {}
@@ -70,8 +71,17 @@ class FakeMerchantStripe:
         return self.invoices[invoice_id]
 
     async def create_promotion_code(self, coupon_id, code, affiliate_id):
+        # Like Stripe: one active promotion code per code string.
+        if code in self.active_codes.values():
+            raise RuntimeError(f"an active promotion code {code} already exists")
         self.promotion_codes.append((coupon_id, code))
-        return f"promo_{code}"
+        same = sum(1 for _, c in self.promotion_codes if c == code)
+        pc_id = f"promo_{code}" if same == 1 else f"promo_{code}_{same}"
+        self.active_codes[pc_id] = code
+        return pc_id
+
+    async def deactivate_promotion_code(self, promotion_code_id):
+        self.active_codes.pop(promotion_code_id, None)
 
     async def list_coupons(self):
         return [{"id": "coupon_20", "name": "20% off", "percent_off": 20, "amount_off": None, "currency": None}]

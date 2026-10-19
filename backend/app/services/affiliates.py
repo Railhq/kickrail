@@ -140,12 +140,37 @@ async def sync_promotion_code(db, merchant: dict, aff: dict, factory) -> str | N
     return warning
 
 
-async def sync_campaign_codes(db, merchant: dict, campaign_id: str, factory) -> str | None:
-    """After a campaign gains a coupon, make the codes its affiliates already have
-    redeemable too. Codes already tied to a promotion code keep it. Returns a warning."""
+async def _retire_promotion_codes(db, merchant: dict, aff: dict, factory) -> str | None:
+    """Switch off the affiliate's promotion codes so new ones can take the same code on
+    another coupon (Stripe allows one active code per string). The old ids stay
+    searchable, so a checkout started with an old code is still credited."""
+    docs = [(db.affiliates, aff)] + [(db.affiliate_codes, c) async for c in db.affiliate_codes.find({"affiliate_id": aff["_id"], "stripe_promotion_code_id": {"$exists": True}})]
+    for coll, doc in docs:
+        pc_id = doc.get("stripe_promotion_code_id")
+        if not pc_id:
+            continue
+        try:
+            await factory(merchant).deactivate_promotion_code(pc_id)
+        except Exception as e:
+            return f"Stripe did not switch off promotion code {doc.get('code')}: {getattr(e, 'user_message', None) or e}"
+        await coll.update_one({"_id": doc["_id"]}, {"$addToSet": {"stripe_retired_promotion_code_ids": pc_id}, "$unset": {"stripe_promotion_code_id": "", "stripe_promotion_code": ""}})
+    return None
+
+
+async def sync_campaign_codes(db, merchant: dict, campaign_id: str, factory, replace: bool = False) -> str | None:
+    """After a campaign's coupon changes, put its affiliates' codes on the new coupon.
+    With `replace`, codes on the old coupon are switched off first; otherwise codes
+    already tied to a promotion code keep it. Returns a warning."""
     warning = None
-    async for aff in db.affiliates.find({"merchant_id": merchant["_id"], "campaign_id": campaign_id, "status": "approved"}):
-        warning = warning or await sync_promotion_code(db, merchant, aff, factory)
+    async for aff in db.affiliates.find({"merchant_id": merchant["_id"], "campaign_id": campaign_id}):
+        if replace and merchant.get("stripe"):
+            w = await _retire_promotion_codes(db, merchant, aff, factory)
+            if w:
+                warning = warning or w
+                continue
+            aff = await db.affiliates.find_one({"_id": aff["_id"]})
+        if aff["status"] == "approved":
+            warning = warning or await sync_promotion_code(db, merchant, aff, factory)
     return warning
 
 
