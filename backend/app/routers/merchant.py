@@ -26,7 +26,7 @@ from ..services import audit, notify
 from ..services import payouts as payout_svc
 from ..services import deletion, rewardful_import, stripe_sync
 from ..services.exports import EXPORTS
-from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, sync_promotion_code
+from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, sync_campaign_codes, sync_promotion_code
 from ..services.notify import EMAIL_KINDS
 
 log = logging.getLogger(__name__)
@@ -610,11 +610,13 @@ async def create_campaign(body: CampaignIn, m=Depends(current_merchant), db=Depe
 
 
 @router.put("/campaigns/{campaign_id}")
-async def update_campaign(campaign_id: str, body: CampaignIn, m=Depends(current_merchant), db=Depends(db_dep)):
+async def update_campaign(campaign_id: str, body: CampaignIn, m=Depends(current_merchant), db=Depends(db_dep), factory=Depends(merchant_api_factory)):
     # Changes apply to future commissions only; earned ones keep their amounts.
+    new_coupon = False
     if body.stripe_coupon_id:
         before = await db.campaigns.find_one({"_id": campaign_id, "merchant_id": m["_id"]}, {"stripe_coupon_id": 1}) or {}
-        if before.get("stripe_coupon_id") != body.stripe_coupon_id:
+        new_coupon = before.get("stripe_coupon_id") != body.stripe_coupon_id
+        if new_coupon:
             plans.require(m, "creator_codes")
     try:
         res = await db.campaigns.find_one_and_update({"_id": campaign_id, "merchant_id": m["_id"]}, {"$set": _campaign_fields(body, m)}, return_document=True)
@@ -622,7 +624,8 @@ async def update_campaign(campaign_id: str, body: CampaignIn, m=Depends(current_
         raise HTTPException(409, "another campaign already uses that join page name")
     if not res:
         raise HTTPException(404, "campaign not found")
-    return campaign_out(res, m)
+    warning = await sync_campaign_codes(db, m, campaign_id, factory) if new_coupon else None
+    return {**campaign_out(res, m), "warning": warning}
 
 
 @router.post("/campaigns/{campaign_id}/default")
