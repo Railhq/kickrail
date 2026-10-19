@@ -84,7 +84,16 @@ async def _checkout_completed(db, merchant, s: dict, api: MerchantApi) -> str:
     if not hit:
         return "no referral"
     referral, _ = hit
-    # Subscriptions earn on invoice.paid; only one-off payments earn here.
+    if s.get("mode") == "subscription" and s.get("payment_status") == "paid" and s.get("invoice"):
+        # invoice.paid often arrives first, before the referral was known, so earn the
+        # first invoice here too. earn() is keyed by invoice, so only one of them counts.
+        try:
+            inv = await api.invoice(_id(s["invoice"]))
+        except Exception:
+            log.warning("invoice lookup failed for %s", s["id"], exc_info=True)
+            return "referral linked"
+        return await _earn_invoice(db, merchant, referral, inv, api)
+    # Other subscriptions earn on invoice.paid; only one-off payments earn here.
     if s.get("mode") != "payment" or s.get("payment_status") != "paid":
         return "referral linked"
     tax = (s.get("total_details") or {}).get("amount_tax") or 0
@@ -107,15 +116,31 @@ async def _customer(db, merchant, c: dict, api: MerchantApi) -> str:
     return "referral linked" if hit else "no referral"
 
 
+async def _invoice_promotion_code(inv: dict, api: MerchantApi) -> str | None:
+    found = _promotion_code(inv.get("discounts"))
+    if found or not any(isinstance(d, str) for d in inv.get("discounts") or []):
+        return found
+    # Invoice webhooks list discounts as ids, so a code typed at checkout needs a lookup.
+    try:
+        return _promotion_code((await api.invoice(inv["id"])).get("discounts"))
+    except Exception:
+        log.warning("discount lookup failed for %s", inv["id"], exc_info=True)
+        return None
+
+
 async def _invoice_paid(db, merchant, inv: dict, api: MerchantApi) -> str:
     customer = _id(inv.get("customer"))
     hit = await attach_referral(
-        db, merchant, AttachInput(email=inv.get("customer_email"), stripe_customer_id=customer, promotion_code_id=_promotion_code(inv.get("discounts"))),
+        db, merchant, AttachInput(email=inv.get("customer_email"), stripe_customer_id=customer, promotion_code_id=await _invoice_promotion_code(inv, api)),
         getattr(api, "customer_created", None),
     )
     if not hit:
         return "no referral"
     referral, _ = hit
+    return await _earn_invoice(db, merchant, referral, inv, api)
+
+
+async def _earn_invoice(db, merchant, referral: dict, inv: dict, api: MerchantApi) -> str:
     taxes = sum(t.get("amount", 0) for t in inv.get("total_taxes") or [])
     base = (inv.get("amount_paid") or 0) - taxes
     paid_at = _ts((inv.get("status_transitions") or {}).get("paid_at") or inv.get("created"))
