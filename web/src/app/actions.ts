@@ -207,9 +207,11 @@ export async function saveCampaign(_: State, f: FormData): Promise<State> {
     slug: str(f, "slug").toLowerCase() || null,
     landing_url: str(f, "landing_url") || null,
   };
-  const r = await attempt(() => api(id ? `/merchant/campaigns/${id}` : "/merchant/campaigns", { method: id ? "PUT" : "POST", body }));
+  const r = await attempt(() => api<{ warning?: string }>(id ? `/merchant/campaigns/${id}` : "/merchant/campaigns", { method: id ? "PUT" : "POST", body }));
   revalidatePath("/dashboard/campaigns");
-  return r.error ? { error: r.error } : { ok: "Saved. Applies to commissions earned from now on." };
+  revalidatePath("/dashboard/affiliates");
+  if (r.error) return { error: r.error };
+  return r.value!.warning ? { error: `Saved, but: ${r.value!.warning}` } : { ok: "Saved. Applies to commissions earned from now on." };
 }
 
 type ProductRuleRow = { match: "product" | "price"; id: string; label: string; type: "percent" | "flat" | "none"; percent: string; flat: string; currency: string };

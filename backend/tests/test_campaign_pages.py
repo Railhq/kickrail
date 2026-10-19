@@ -58,3 +58,25 @@ async def test_private_campaigns_and_bad_input(client, db, prog):
     assert (await client.post("/merchant/campaigns", json={**CAMP, "name": "Again", "public": True, "slug": "partners"}, headers=h)).status_code == 409
     assert (await client.post("/merchant/campaigns", json={**CAMP, "name": "Bad", "public": True, "slug": "No Spaces"}, headers=h)).status_code == 422
     assert (await client.post("/merchant/campaigns", json={**CAMP, "name": "Off", "landing_url": "https://elsewhere.example/"}, headers=h)).status_code == 422
+
+
+async def test_adding_a_coupon_makes_existing_codes_redeemable(client, db, prog, fakes):
+    h = auth(prog["token"])
+    assert (await client.post("/merchant/stripe", json={"restricted_key": "rk_test_pageco"}, headers=h)).status_code == 200
+    c = (await client.post("/merchant/campaigns", json={**CAMP, "name": "Creators"}, headers=h)).json()
+    cat = await signup(client, db, "cat@pages.example", "Cat")
+    a = (await client.post("/programs/pageco/join", json={}, headers=auth(cat))).json()
+    r = await client.patch(f"/merchant/affiliates/{a['id']}", json={"campaign_id": c["id"], "status": "approved", "code": "catcast"}, headers=h)
+    assert r.status_code == 200 and not (await db.affiliates.find_one({"_id": a["id"]})).get("stripe_promotion_code_id")
+    assert (await client.post(f"/merchant/affiliates/{a['id']}/codes", json={"code": "catpod"}, headers=h)).status_code == 200
+
+    r = await client.put(f"/merchant/campaigns/{c['id']}", json={**CAMP, "name": "Creators", "stripe_coupon_id": "coupon_15"}, headers=h)
+    assert r.status_code == 200 and r.json()["warning"] is None
+    assert {("coupon_15", "CATCAST"), ("coupon_15", "CATPOD")} <= set(fakes["merchant"].promotion_codes)
+    aff = await db.affiliates.find_one({"_id": a["id"]})
+    assert aff["stripe_promotion_code_id"] == "promo_CATCAST" and aff["stripe_promotion_code"] == "CATCAST"
+    assert (await db.affiliate_codes.find_one({"affiliate_id": a["id"]}))["stripe_promotion_code_id"] == "promo_CATPOD"
+    # Saving again with the same coupon doesn't create duplicates.
+    n = len(fakes["merchant"].promotion_codes)
+    await client.put(f"/merchant/campaigns/{c['id']}", json={**CAMP, "name": "Creators", "stripe_coupon_id": "coupon_15"}, headers=h)
+    assert len(fakes["merchant"].promotion_codes) == n

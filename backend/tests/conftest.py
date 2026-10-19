@@ -40,6 +40,7 @@ class FakeMerchantStripe:
         self.customer_times: dict = {}
         self.customer_metadata: dict[str, dict] = {}
         self.fail_customers: dict[str, Exception] = {}
+        self.invoices: dict[str, dict] = {}
 
     async def account(self):
         return {"id": "acct_merchant", "name": "Acme"}
@@ -64,6 +65,9 @@ class FakeMerchantStripe:
 
     async def invoice_for_payment_intent(self, pi):
         return next((i for i, p in self.invoice_pi.items() if p == pi), None)
+
+    async def invoice(self, invoice_id):
+        return self.invoices[invoice_id]
 
     async def create_promotion_code(self, coupon_id, code, affiliate_id):
         self.promotion_codes.append((coupon_id, code))

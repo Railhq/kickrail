@@ -140,6 +140,15 @@ async def sync_promotion_code(db, merchant: dict, aff: dict, factory) -> str | N
     return warning
 
 
+async def sync_campaign_codes(db, merchant: dict, campaign_id: str, factory) -> str | None:
+    """After a campaign gains a coupon, make the codes its affiliates already have
+    redeemable too. Codes already tied to a promotion code keep it. Returns a warning."""
+    warning = None
+    async for aff in db.affiliates.find({"merchant_id": merchant["_id"], "campaign_id": campaign_id, "status": "approved"}):
+        warning = warning or await sync_promotion_code(db, merchant, aff, factory)
+    return warning
+
+
 def check_landing(m: dict, landing_url: str | None) -> str | None:
     if not landing_url:
         return None

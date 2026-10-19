@@ -356,7 +356,7 @@ async def update_campaign(request: Request, db, m: dict, a: CampaignUpdate) -> d
         fields["flat_cents"] = None
     if changes.get("duration_mode") in ("once", "forever"):
         fields["months"] = None
-    out = await mr.update_campaign(a.campaign_id, _campaign_in(fields), m=m, db=db)
+    out = await mr.update_campaign(a.campaign_id, _campaign_in(fields), m=m, db=db, factory=_dep(request, deps.merchant_api_factory))
     if a.make_default:
         await mr.make_default(a.campaign_id, m=m, db=db)
         out["is_default"] = True

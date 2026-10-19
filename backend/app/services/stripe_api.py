@@ -32,8 +32,14 @@ def _client(key: str) -> stripe.StripeClient:
 class MerchantApi(Protocol):
     async def payment_intent_for_invoice(self, invoice_id: str) -> str | None: ...
     async def invoice_for_payment_intent(self, payment_intent_id: str) -> str | None: ...
+    async def invoice(self, invoice_id: str) -> dict:
+        """An invoice with its discounts expanded: webhooks only carry discount ids."""
+        inv = await self.c.v1.invoices.retrieve_async(invoice_id, {"expand": ["discounts"]})
+        return inv.to_dict()
+
     async def create_promotion_code(self, coupon_id: str, code: str, affiliate_id: str) -> str: ...
     async def update_customer_metadata(self, customer_id: str, metadata: dict) -> None: ...
+    async def invoice(self, invoice_id: str) -> dict: ...
 
 
 class MerchantStripe:
@@ -88,6 +94,11 @@ class MerchantStripe:
         for p in page.data:
             return p.invoice if isinstance(p.invoice, str) else p.invoice.id
         return None
+
+    async def invoice(self, invoice_id: str) -> dict:
+        """An invoice with its discounts expanded: webhooks only carry discount ids."""
+        inv = await self.c.v1.invoices.retrieve_async(invoice_id, {"expand": ["discounts"]})
+        return inv.to_dict()
 
     async def create_promotion_code(self, coupon_id: str, code: str, affiliate_id: str) -> str:
         pc = await self.c.v1.promotion_codes.create_async(
