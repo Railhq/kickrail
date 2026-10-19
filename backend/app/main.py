@@ -14,6 +14,8 @@ from .services.billing import check_limits
 from .services.outbox import run_dispatcher
 from .services.payouts import announce_due, poll_paypal
 from .services.paypal import PayPal
+from .services.stripe_api import MerchantStripe
+from .services.stripe_sync import sync_customers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -24,10 +26,14 @@ async def _periodic(db) -> None:
     await announce_due(db)
 
 
+async def _each(db) -> None:
+    await sync_customers(db, MerchantStripe.for_merchant)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db = await get_db()
-    task = asyncio.create_task(run_dispatcher(db, extra=_periodic)) if get_settings().dispatcher else None
+    task = asyncio.create_task(run_dispatcher(db, extra=_periodic, each=_each)) if get_settings().dispatcher else None
     yield
     if task:
         task.cancel()

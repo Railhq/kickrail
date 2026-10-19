@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { reviewReferral } from "@/app/actions";
+import { DeleteButton } from "@/components/DeleteButton";
 import { Badge, Card, Empty, StatusBadge, Table } from "@/components/ui";
 import { api } from "@/lib/backend";
 import { date } from "@/lib/format";
@@ -51,12 +52,11 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
                   <td className="px-5 py-3 text-muted">{SOURCE[r.source] ?? r.source}</td>
                   <td className="px-5 py-3 text-muted">{date(r.created_at)}</td>
                   <td className="px-5 py-3">
-                    {open && (
-                      <div className="flex justify-end gap-2">
-                        <form action={reviewReferral.bind(null, r.id, "clear")}><button className="btn btn-primary">Approve</button></form>
-                        <form action={reviewReferral.bind(null, r.id, "reject")}><button className="btn btn-danger">Reject</button></form>
-                      </div>
-                    )}
+                    <div className="flex justify-end gap-2">
+                      {open && <form action={reviewReferral.bind(null, r.id, "clear")}><button className="btn btn-primary">Approve</button></form>}
+                      {open && <form action={reviewReferral.bind(null, r.id, "reject")}><button className="btn btn-danger">Reject</button></form>}
+                      <DeleteButton kind="referrals" id={r.id} confirmText={`Delete the referral for ${r.email ?? r.external_user_id ?? r.stripe_customer_id ?? "this customer"}, and its unpaid commissions? It's kept in your audit log. Add a reason (optional):`} />
+                    </div>
                   </td>
                 </tr>
               );

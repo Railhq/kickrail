@@ -37,7 +37,7 @@ export default function Codes() {
       <List>
         <li>Codes are 3 to 20 letters and digits, unique within the program.</li>
         <li>An affiliate can have more than one code; all of them credit the same affiliate.</li>
-        <li>If someone was already referred by a link, a code from a different affiliate does not take them. The first referral wins.</li>
+        <li>If someone was already referred by a link, a code from a different affiliate does not take them: the first referral wins. Under last-touch attribution the code moves them, until their first payment.</li>
         <li>Changing a code creates a new Stripe promotion code and the old one stops crediting the affiliate. Stripe keeps the old one active, so archive it there if it shouldn&apos;t give a discount any more.</li>
       </List>
       <Note title="If Stripe refuses the code">

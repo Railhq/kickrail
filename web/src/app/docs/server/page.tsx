@@ -93,7 +93,7 @@ requests.post(
 }`}</Snippet>
       <List>
         <li><C>{`{"referred": false}`}</C> means nothing pointed at an approved affiliate. That is the normal answer for an organic signup; you can send every signup and let Kickrail decide.</li>
-        <li><C>created: false</C> means the person was already attributed. The first affiliate keeps them, and the call is safe to repeat.</li>
+        <li><C>created: false</C> means the person was already attributed. The first affiliate keeps them (or, with last-touch attribution, a newer link or code moves them until their first payment), and the call is safe to repeat.</li>
         <li><C>flagged: true</C> means a self-referral check matched. Commissions for this referral wait for your review.</li>
       </List>
 

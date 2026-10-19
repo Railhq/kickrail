@@ -33,6 +33,7 @@ class MerchantApi(Protocol):
     async def payment_intent_for_invoice(self, invoice_id: str) -> str | None: ...
     async def invoice_for_payment_intent(self, payment_intent_id: str) -> str | None: ...
     async def create_promotion_code(self, coupon_id: str, code: str, affiliate_id: str) -> str: ...
+    async def update_customer_metadata(self, customer_id: str, metadata: dict) -> None: ...
 
 
 class MerchantStripe:
@@ -49,6 +50,9 @@ class MerchantStripe:
     @classmethod
     def for_account(cls, account_id: str) -> "MerchantStripe":
         return cls(get_settings().oauth_key, account_id)
+
+    async def update_customer_metadata(self, customer_id: str, metadata: dict) -> None:
+        await self.c.v1.customers.update_async(customer_id, {"metadata": metadata})
 
     async def customer_created(self, customer_id: str) -> datetime | None:
         c = await self.c.v1.customers.retrieve_async(customer_id)

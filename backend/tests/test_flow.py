@@ -252,3 +252,198 @@ async def test_overview_and_tenant_isolation(client):
     assert o["affiliates"] == 2 and o["customers"] == 3 and o["installed"]
     # The affiliate has no merchant workspace and can't read Acme's data
     assert (await client.get("/merchant/commissions", headers=auth(S["aff"]))).status_code == 404
+
+
+async def test_concurrent_signups_make_one_referral(db):
+    import asyncio
+
+    from app.services.referrals import AttachInput, attach_referral
+
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    hits = await asyncio.gather(*[attach_referral(db, m, AttachInput(click_id=S["click"], email="Race@Example.com", external_user_id="u_race")) for _ in range(6)])
+    assert len({h[0]["_id"] for h in hits}) == 1 and sum(h[1] for h in hits) == 1
+    assert await db.referrals.count_documents({"merchant_id": m["_id"], "email": "race@example.com"}) == 1
+
+
+async def test_stripe_events_are_recorded(client, db):
+    e = await db.stripe_events.find_one({"_id": "evt_inv1"})
+    assert e["status"] == "done" and e["deliveries"] == 2 and e["merchant_id"] == S["merchant_id"] and e["type"] == "invoice.paid"
+    assert e["outcome"].startswith("commission")
+    # A delivery that fails is recorded as failed, and the next delivery runs it again.
+    from app.routers import webhooks
+
+    real = webhooks.process_merchant_event
+
+    async def boom(*a, **k):
+        raise RuntimeError("stripe down")
+
+    webhooks.process_merchant_event = boom
+    try:
+        with pytest.raises(RuntimeError):
+            await send_event(client, hook_url(), "whsec_merchant", "customer.created", {"id": "cus_retry"}, event_id="evt_retry")
+    finally:
+        webhooks.process_merchant_event = real
+    assert (await db.stripe_events.find_one({"_id": "evt_retry"}))["error"] == "RuntimeError: stripe down"
+    r = await send_event(client, hook_url(), "whsec_merchant", "customer.created", {"id": "cus_retry"}, event_id="evt_retry")
+    assert r.json()["outcome"] != "duplicate"
+    e = await db.stripe_events.find_one({"_id": "evt_retry"})
+    assert e["status"] == "done" and e["deliveries"] == 2 and "error" not in e
+
+
+async def test_money_actions_are_audited(client, db):
+    rows = (await client.get("/merchant/audit", headers=auth(S["owner"]))).json()
+    by = {(r["action"], r["target"]): r for r in rows}
+    p = by[("payout.created", S["manual_payout"])]
+    assert p["actor"]["kind"] == "user" and p["actor"]["email"] and p["detail"]["method"] == "manual" and p["detail"]["total_cents"] > 0
+    assert by[("referral.flags_cleared", S["self_ref"])]["detail"]["commissions_released"] >= 1
+    # Rejecting an affiliate and the API key acting are recorded too, with who did it.
+    await client.patch(f"/merchant/affiliates/{S['aff_id']}", json={"status": "rejected"}, headers=auth(S["owner"]))
+    await client.patch(f"/merchant/affiliates/{S['aff_id']}", json={"status": "approved"}, headers=auth(S["owner"]))
+    rows = (await client.get(f"/merchant/audit?target={S['aff_id']}", headers=auth(S["owner"]))).json()
+    assert [r["action"] for r in rows][:2] == ["affiliate.approved", "affiliate.rejected"] and rows[0]["detail"]["previous"] == "rejected"
+    # Affiliates can't read the program's log.
+    assert (await client.get("/merchant/audit", headers=auth(S["aff"]))).status_code == 404
+
+
+async def test_outbox_rows_commit_with_the_write(db):
+    """A commission and its webhook event commit together or not at all."""
+    if not (await db.command("hello")).get("setName"):
+        pytest.skip("transactions need a replica set (set KR_TEST_MONGODB_URI)")
+    from app.services import notify, stripe_events
+
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    referral = await db.referrals.find_one({"merchant_id": m["_id"], "flags": {"$size": 0}, "test": {"$exists": False}})
+    real = notify.commission_created
+
+    async def half(tdb, merchant, doc):
+        await tdb.events.insert_one({"_id": "evt_half", "merchant_id": merchant["_id"], "type": "commission.created"})
+        raise RuntimeError("crashed before commit")
+
+    notify.commission_created = half
+    try:
+        with pytest.raises(RuntimeError):
+            await stripe_events.earn(db, m, referral, "inv:atomic", 5000, "usd", datetime.now(UTC), None)
+    finally:
+        notify.commission_created = real
+    assert not await db.commissions.find_one({"source_key": "inv:atomic"})
+    assert not await db.events.find_one({"_id": "evt_half"})
+    # Run again for real: both land.
+    assert (await stripe_events.earn(db, m, referral, "inv:atomic", 5000, "usd", datetime.now(UTC), None)).startswith("commission")
+    c = await db.commissions.find_one({"source_key": "inv:atomic"})
+    assert await db.events.find_one({"type": "commission.created", "data.id": c["_id"]})
+
+
+async def test_referrer_is_written_onto_the_stripe_customer(db, fakes):
+    import stripe
+
+    from app.services.referrals import AttachInput, attach_referral
+    from app.services.stripe_sync import sync_customers
+
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    await attach_referral(db, m, AttachInput(token=S["token"], email="synced@example.com", stripe_customer_id="cus_synced"))
+    await attach_referral(db, m, AttachInput(token=S["token"], email="gone@example.com", stripe_customer_id="cus_gone"))
+    fakes["merchant"].fail_customers["cus_gone"] = stripe.InvalidRequestError("No such customer: 'cus_gone'", "id")
+    await sync_customers(db, lambda _m: fakes["merchant"])
+    r = await db.referrals.find_one({"stripe_customer_id": "cus_synced"})
+    assert fakes["merchant"].customer_metadata["cus_synced"] == {
+        "kickrail_referral": r["_id"], "kickrail_affiliate": S["aff_id"], "kickrail_affiliate_token": S["token"], "kickrail_campaign": r["campaign_id"],
+    }
+    assert "stripe_sync_due" not in r and r["stripe_synced_at"]
+    gone = await db.referrals.find_one({"stripe_customer_id": "cus_gone"})
+    assert "stripe_sync_due" not in gone and "No such customer" in gone["stripe_sync_error"]
+    # A network blip is retried later instead of dropped.
+    await attach_referral(db, m, AttachInput(token=S["token"], email="blip@example.com", stripe_customer_id="cus_blip"))
+    fakes["merchant"].fail_customers["cus_blip"] = TimeoutError("read timed out")
+    await sync_customers(db, lambda _m: fakes["merchant"])
+    blip = await db.referrals.find_one({"stripe_customer_id": "cus_blip"})
+    assert blip["stripe_sync_due"] and blip["stripe_sync_attempts"] == 1 and blip["stripe_sync_retry_at"]
+    del fakes["merchant"].fail_customers["cus_blip"]
+    await sync_customers(db, lambda _m: fakes["merchant"], now=blip["stripe_sync_retry_at"])
+    assert "cus_blip" in fakes["merchant"].customer_metadata
+
+
+async def test_last_touch_moves_an_unpaid_referral(client, db, fakes):
+    from app.services.referrals import AttachInput, attach_referral
+    from app.services.stripe_sync import sync_customers
+
+    other = await signup(client, "second@example.com", "Sam Second")
+    b = (await client.post("/programs/acme/join", json={}, headers=auth(other))).json()
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    first, _ = await attach_referral(db, m, AttachInput(token=S["token"], email="touch@example.com", stripe_customer_id="cus_touch"))
+    # First touch (the default): a later link doesn't take them.
+    again, _ = await attach_referral(db, m, AttachInput(token=b["token"], email="touch@example.com"))
+    assert again["affiliate_id"] == S["aff_id"]
+
+    r = await client.patch("/merchant", json={"attribution": "last"}, headers=auth(S["owner"]))
+    assert r.json()["settings"]["attribution"] == "last"
+    m = await db.merchants.find_one({"_id": S["merchant_id"]})
+    moved, created = await attach_referral(db, m, AttachInput(token=b["token"], email="touch@example.com"))
+    assert not created and moved["_id"] == first["_id"] and moved["affiliate_id"] == b["id"]
+    saved = await db.referrals.find_one({"_id": first["_id"]})
+    assert saved["affiliate_id"] == b["id"] and saved["previous_affiliates"][0]["affiliate_id"] == S["aff_id"]
+    ev = await db.events.find_one({"type": "referral.updated", "data.id": first["_id"]})
+    assert ev["data"]["affiliate_id"] == b["id"] and ev["data"]["previous_affiliate_id"] == S["aff_id"]
+    # The Stripe customer is updated to the new affiliate too.
+    await sync_customers(db, lambda _m: fakes["merchant"])
+    assert fakes["merchant"].customer_metadata["cus_touch"]["kickrail_affiliate"] == b["id"]
+    # No signal pointing anywhere new: it stays.
+    same, _ = await attach_referral(db, m, AttachInput(email="touch@example.com"))
+    assert same["affiliate_id"] == b["id"]
+    # Once they've paid, the referral is settled.
+    await db.referrals.update_one({"_id": first["_id"]}, {"$set": {"first_paid_at": datetime.now(UTC), "status": "customer"}})
+    kept, _ = await attach_referral(db, m, AttachInput(token=S["token"], email="touch@example.com"))
+    assert kept["affiliate_id"] == b["id"]
+    await client.patch("/merchant", json={"attribution": "first"}, headers=auth(S["owner"]))
+
+
+async def test_rejected_referral_never_earns_again(client, db):
+    r = await client.post("/v1/referrals", json={"via": S["token"], "email": "Creator+again@YouTube.example", "stripe_customer_id": "cus_rej"}, headers=auth(S["sk"]))
+    rid = r.json()["referral"]["id"]
+    paid = int(time.time())
+    inv = {"customer": "cus_rej", "amount_paid": 10000, "currency": "usd", "status_transitions": {"paid_at": paid}}
+    assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_rej1"})).json()["outcome"] == "commission 3000 usd"
+    await client.post(f"/merchant/referrals/{rid}/reject", headers=auth(S["owner"]))
+    assert (await db.commissions.find_one({"source_key": "inv:in_rej1"}))["status"] == "void"
+    # The renewal used to earn an unheld commission, because rejecting also clears the flags.
+    assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_rej2"})).json()["outcome"] == "no commission: referral rejected"
+    assert not await db.commissions.find_one({"source_key": "inv:in_rej2"})
+
+
+async def test_deleting_commissions_and_referrals_is_audited(client, db, fakes):
+    r = await client.post("/v1/referrals", json={"via": S["token"], "email": "delete-me@example.com", "stripe_customer_id": "cus_del"}, headers=auth(S["sk"]))
+    rid = r.json()["referral"]["id"]
+    paid = int(time.time())
+    inv = {"customer": "cus_del", "amount_paid": 10000, "currency": "usd", "status_transitions": {"paid_at": paid}}
+    await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_del1"})
+    c = await db.commissions.find_one({"source_key": "inv:in_del1"})
+
+    r = await client.request("DELETE", f"/merchant/commissions/{c['_id']}", json={"reason": "duplicate order"}, headers=auth(S["owner"]))
+    assert r.status_code == 200, r.text
+    assert not await db.commissions.find_one({"_id": c["_id"]})
+    kept = await db.deleted_records.find_one({"record_id": c["_id"]})
+    assert kept["doc"]["amount_cents"] == 3000 and kept["reason"] == "duplicate order" and kept["actor"]["kind"] == "user"
+    row = await db.audit_log.find_one({"action": "commission.deleted", "target": c["_id"]})
+    assert row["detail"]["amount_cents"] == 3000 and row["detail"]["reason"] == "duplicate order" and row["actor"]["kind"] == "user"
+    assert await db.events.find_one({"type": "commission.deleted", "data.id": c["_id"]})
+    # Stripe sending the same payment again doesn't bring it back; a new payment still earns.
+    assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_del1"})).json()["outcome"] == "no commission: deleted by merchant"
+    assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", inv | {"id": "in_del2"})).json()["outcome"] == "commission 3000 usd"
+
+    # Anything paid or in a payout blocks the delete.
+    await db.commissions.update_one({"source_key": "inv:in_del2"}, {"$set": {"payout_id": "po_x"}})
+    assert (await client.delete(f"/merchant/referrals/{rid}", headers=auth(S["owner"]))).status_code == 409
+    c2 = await db.commissions.find_one({"source_key": "inv:in_del2"})
+    assert (await client.delete(f"/merchant/commissions/{c2['_id']}", headers=auth(S["owner"]))).status_code == 409
+    await db.commissions.update_one({"_id": c2["_id"]}, {"$unset": {"payout_id": ""}})
+
+    fakes["merchant"].customer_metadata["cus_del"] = {"kickrail_referral": rid}
+    r = await client.delete(f"/merchant/referrals/{rid}", headers=auth(S["owner"]))
+    assert r.json() == {"ok": True, "commissions_deleted": 1}
+    assert not await db.referrals.find_one({"_id": rid}) and not await db.commissions.find_one({"_id": c2["_id"]})
+    row = await db.audit_log.find_one({"action": "referral.deleted", "target": rid})
+    assert row["detail"]["commissions_deleted"] == [c2["_id"]] and row["detail"]["email"] == "delete-me@example.com"
+    assert await db.deleted_records.count_documents({"merchant_id": S["merchant_id"], "kind": "referral", "record_id": rid}) == 1
+    assert await db.events.find_one({"type": "referral.deleted", "data.id": rid})
+    assert fakes["merchant"].customer_metadata["cus_del"]["kickrail_referral"] == ""
+    # Another merchant's id, or one already gone, is a 404.
+    assert (await client.delete(f"/merchant/referrals/{rid}", headers=auth(S["owner"]))).status_code == 404

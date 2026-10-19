@@ -16,14 +16,15 @@ from pymongo.errors import DuplicateKeyError
 from .. import plans
 from ..config import get_settings
 from ..crypto import decrypt, encrypt
+from ..db import run_in_transaction
 from ..deps import merchant_api_factory, merchant_key_client, paypal_factory, paypal_key_client, merchant_account_client, platform_api, stripe_oauth, stripe_oauth_optional, rewardful_client
 from ..domain.commission import describe_rate, describe_rule
 from ..ids import new_id, random_id, sha256, slugify
 from ..security import MAX_PROGRAMS, can_be_paid, current_merchant, current_user, db_dep
 from ..serializers import affiliate_url, code_obj, join_url, link_obj, portal_base
-from ..services import notify
+from ..services import audit, notify
 from ..services import payouts as payout_svc
-from ..services import rewardful_import
+from ..services import deletion, rewardful_import, stripe_sync
 from ..services.exports import EXPORTS
 from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, sync_promotion_code
 from ..services.notify import EMAIL_KINDS
@@ -40,7 +41,7 @@ def out(doc: dict | None, *drop: str) -> dict | None:
     return d
 
 
-DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False}
+DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False, "attribution": "first"}
 
 
 def plan_summary(m: dict, plan: dict | None = None) -> dict:
@@ -156,6 +157,7 @@ class SettingsIn(BaseModel):
     auto_approve: bool | None = None
     affiliate_links: bool | None = None
     require_tax_form: bool | None = None
+    attribution: Literal["first", "last"] | None = None
     emails: dict[str, bool] | None = None
 
 
@@ -166,7 +168,7 @@ async def update_merchant(body: SettingsIn, m=Depends(current_merchant), db=Depe
         s["name"] = body.name.strip()
     if body.website is not None:
         s["website"] = str(body.website).rstrip("/")
-    for k in ("cookie_days", "auto_approve", "affiliate_links", "require_tax_form"):
+    for k in ("cookie_days", "auto_approve", "affiliate_links", "require_tax_form", "attribution"):
         if getattr(body, k) is not None:
             s[f"settings.{k}"] = getattr(body, k)
     for k, on in (body.emails or {}).items():
@@ -398,6 +400,8 @@ async def connect_stripe(body: StripeConnectIn, m=Depends(current_merchant), db=
         "connected_at": datetime.now(UTC),
     }
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"stripe": stripe}})
+    await audit.record(db, m["_id"], "stripe.connected", m["_id"], account_id=stripe.get("account_id"), livemode=stripe.get("livemode"))
+    await stripe_sync.mark_merchant(db, m["_id"])
     return merchant_out({**m, "stripe": stripe})
 
 
@@ -450,6 +454,9 @@ async def stripe_oauth_finish(body: StripeOAuthIn, user=Depends(current_user), d
     await _drop_old_webhook(m, factory)
     stripe = {"oauth": True, "account_id": acct["id"], "account_name": acct["name"], "livemode": tok["livemode"], "connected_at": datetime.now(UTC)}
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"stripe": stripe}})
+    audit.as_user(user)
+    await audit.record(db, m["_id"], "stripe.connected", m["_id"], account_id=acct["id"], livemode=tok["livemode"], oauth=True)
+    await stripe_sync.mark_merchant(db, m["_id"])
     return merchant_out({**m, "stripe": stripe})
 
 
@@ -466,6 +473,7 @@ async def disconnect_stripe(m=Depends(current_merchant), db=Depends(db_dep), fac
         except Exception:
             log.warning("could not delete webhook for %s", m["_id"], exc_info=True)
     await db.merchants.update_one({"_id": m["_id"]}, {"$unset": {"stripe": ""}})
+    await audit.record(db, m["_id"], "stripe.disconnected", m["_id"], account_id=(m.get("stripe") or {}).get("account_id"))
     return {"ok": True}
 
 
@@ -743,6 +751,11 @@ async def patch_affiliate(db, m: dict, aff: dict, body: AffiliatePatch, factory)
     warning = await sync_promotion_code(db, m, new, factory)
     if s or unset:
         await notify.affiliate_updated(db, m, new, aff["status"] if new["status"] != aff["status"] else None)
+        if new["status"] != aff["status"]:
+            await audit.record(db, m["_id"], f"affiliate.{new['status']}", aff["_id"], previous=aff["status"])
+        money = {k: (aff.get(k), new.get(k)) for k in ("campaign_id", "rate_override") if aff.get(k) != new.get(k)}
+        if money:
+            await audit.record(db, m["_id"], "affiliate.terms_changed", aff["_id"], **{k: {"from": a, "to": b} for k, (a, b) in money.items()})
     return {**out(new), "warning": warning}
 
 
@@ -827,25 +840,68 @@ async def list_referrals(flagged: bool = False, m=Depends(current_merchant), db=
 
 @router.post("/referrals/{referral_id}/clear")
 async def clear_flags(referral_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
-    res = await db.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True}})
-    if not res.matched_count:
+    async def clear(tdb) -> bool:
+        res = await tdb.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True}})
+        if not res.matched_count:
+            return False
+        released = await tdb.commissions.update_many({"referral_id": referral_id, "held": True}, {"$set": {"held": False}})
+        await audit.record(tdb, m["_id"], "referral.flags_cleared", referral_id, commissions_released=released.modified_count)
+        async for c in tdb.commissions.find({"referral_id": referral_id}, {"_id": 1}):
+            await notify.commission_updated(tdb, m["_id"], c["_id"])
+        return True
+
+    if not await run_in_transaction(db, clear):
         raise HTTPException(404, "referral not found")
-    await db.commissions.update_many({"referral_id": referral_id}, {"$set": {"held": False}})
-    async for c in db.commissions.find({"referral_id": referral_id}, {"_id": 1}):
-        await notify.commission_updated(db, m["_id"], c["_id"])
     return {"ok": True}
 
 
 @router.post("/referrals/{referral_id}/reject")
 async def reject_referral(referral_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
-    res = await db.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True, "rejected": True}})
-    if not res.matched_count:
+    async def reject(tdb) -> bool:
+        res = await tdb.referrals.update_one({"_id": referral_id, "merchant_id": m["_id"]}, {"$set": {"flags_cleared": True, "rejected": True}})
+        if not res.matched_count:
+            return False
+        voidable = {"referral_id": referral_id, "status": "pending", "payout_id": {"$exists": False}}
+        ids = [c["_id"] async for c in tdb.commissions.find(voidable, {"_id": 1})]
+        await tdb.commissions.update_many({"_id": {"$in": ids}}, {"$set": {"status": "void", "void_reason": "referral rejected", "amount_cents": 0}})
+        await audit.record(tdb, m["_id"], "referral.rejected", referral_id, commissions_voided=ids)
+        for cid in ids:
+            await notify.commission_updated(tdb, m["_id"], cid)
+        return True
+
+    if not await run_in_transaction(db, reject):
         raise HTTPException(404, "referral not found")
-    voidable = {"referral_id": referral_id, "status": "pending", "payout_id": {"$exists": False}}
-    ids = [c["_id"] async for c in db.commissions.find(voidable, {"_id": 1})]
-    await db.commissions.update_many({"_id": {"$in": ids}}, {"$set": {"status": "void", "void_reason": "referral rejected", "amount_cents": 0}})
-    for cid in ids:
-        await notify.commission_updated(db, m["_id"], cid)
+    return {"ok": True}
+
+
+class DeleteIn(BaseModel):
+    reason: str | None = Field(None, max_length=300)
+
+
+@router.delete("/referrals/{referral_id}")
+async def delete_referral(referral_id: str, body: DeleteIn | None = None, m=Depends(current_merchant), db=Depends(db_dep), factory=Depends(merchant_api_factory)):
+    try:
+        r, commissions = await deletion.delete_referral(db, m["_id"], referral_id, body.reason if body else None)
+    except deletion.NotFound:
+        raise HTTPException(404, "referral not found")
+    except deletion.Blocked as e:
+        raise HTTPException(409, str(e))
+    if r.get("stripe_customer_id") and m.get("stripe"):
+        try:  # don't leave the Stripe customer pointing at a referral that's gone
+            await factory(m).update_customer_metadata(r["stripe_customer_id"], {k: "" for k in stripe_sync.customer_metadata(r, None)})
+        except Exception:
+            log.warning("clearing customer metadata failed for %s", r["_id"], exc_info=True)
+    return {"ok": True, "commissions_deleted": len(commissions)}
+
+
+@router.delete("/commissions/{commission_id}")
+async def delete_commission(commission_id: str, body: DeleteIn | None = None, m=Depends(current_merchant), db=Depends(db_dep)):
+    try:
+        await deletion.delete_commission(db, m["_id"], commission_id, body.reason if body else None)
+    except deletion.NotFound:
+        raise HTTPException(404, "commission not found")
+    except deletion.Blocked as e:
+        raise HTTPException(409, str(e))
     return {"ok": True}
 
 
@@ -884,6 +940,13 @@ async def overview(m=Depends(current_merchant), db=Depends(db_dep)):
         "installed": await db.clicks.count_documents({"merchant_id": mid}) > 0,
         "plan": plan_summary(m),
     }
+
+
+@router.get("/audit")
+async def audit_log(target: str | None = None, m=Depends(current_merchant), db=Depends(db_dep)):
+    """Who approved, rejected, cleared, voided or paid what, newest first."""
+    q = {"merchant_id": m["_id"]} | ({"target": target} if target else {})
+    return [out(r) for r in await db.audit_log.find(q).sort("created_at", -1).limit(500).to_list(None)]
 
 
 # ---------- payouts ----------
@@ -955,12 +1018,14 @@ async def connect_paypal(body: PayPalIn, m=Depends(current_merchant), db=Depends
         raise HTTPException(400, str(e))
     paypal = {"client_id": body.client_id.strip(), "secret_enc": encrypt(body.secret.strip()), "mode": body.mode, "connected_at": datetime.now(UTC)}
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"paypal": paypal}})
+    await audit.record(db, m["_id"], "paypal.connected", m["_id"], client_id=paypal["client_id"], mode=body.mode)
     return merchant_out({**m, "paypal": paypal})
 
 
 @router.delete("/paypal")
 async def disconnect_paypal(m=Depends(current_merchant), db=Depends(db_dep)):
     await db.merchants.update_one({"_id": m["_id"]}, {"$unset": {"paypal": ""}})
+    await audit.record(db, m["_id"], "paypal.disconnected", m["_id"])
     return {"ok": True}
 
 

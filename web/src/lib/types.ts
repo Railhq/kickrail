@@ -6,7 +6,7 @@ export type Merchant = {
   public_key: string;
   secret_key_hint: string;
   owner_id: string;
-  settings: { cookie_days: number; param_names: string[]; auto_approve: boolean; affiliate_links: boolean; require_tax_form: boolean; emails: Record<string, boolean> };
+  settings: { cookie_days: number; param_names: string[]; auto_approve: boolean; affiliate_links: boolean; require_tax_form: boolean; attribution: "first" | "last"; emails: Record<string, boolean> };
   branding: Branding;
   portal_domains: PortalDomain[];
   domain_limit: number;

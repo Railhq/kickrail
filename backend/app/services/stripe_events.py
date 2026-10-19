@@ -12,6 +12,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 
 from ..domain.commission import Line, decide_commission, decide_refund
+from ..db import run_in_transaction
 from ..ids import new_id
 from . import notify
 from .referrals import AttachInput, attach_referral
@@ -132,6 +133,9 @@ async def earn(
 ) -> str:
     if await db.commissions.find_one({"merchant_id": merchant["_id"], "source_key": source_key}):
         return "already earned"
+    # A commission the merchant deleted stays deleted, even if Stripe sends the payment again.
+    if await db.deleted_records.find_one({"merchant_id": merchant["_id"], "source_key": source_key}):
+        return "no commission: deleted by merchant"
     campaign = await db.campaigns.find_one({"_id": referral["campaign_id"]})
     if not campaign:
         return "campaign missing"
@@ -139,11 +143,17 @@ async def earn(
 
     first_paid_at = referral.get("first_paid_at") or paid_at
     if base_cents > 0 and not referral.get("first_paid_at"):
-        await db.referrals.update_one({"_id": referral["_id"]}, {"$set": {"first_paid_at": paid_at, "status": "customer"}})
-        await notify.referral_converted(db, merchant["_id"], {**referral, "first_paid_at": paid_at, "status": "customer"})
+
+        async def converted(tdb):
+            await tdb.referrals.update_one({"_id": referral["_id"]}, {"$set": {"first_paid_at": paid_at, "status": "customer"}})
+            await notify.referral_converted(tdb, merchant["_id"], {**referral, "first_paid_at": paid_at, "status": "customer"})
+
+        await run_in_transaction(db, converted)
 
     if referral.get("test"):
         return "no commission: test referral"
+    if referral.get("rejected"):
+        return "no commission: referral rejected"
     # Lead bounties are paid for the signup, so they don't use up a one-time sale commission.
     prior = await db.commissions.count_documents({"referral_id": referral["_id"], "status": {"$ne": "void"}, "amount_cents": {"$gt": 0}, "kind": {"$ne": "lead"}})
     d = decide_commission(campaign, base_cents, currency, paid_at, first_paid_at, prior, affiliate, lines)
@@ -170,11 +180,14 @@ async def earn(
     }
     if payment_intent_id:
         doc["payment_intent_id"] = payment_intent_id
+    async def create(tdb):
+        await tdb.commissions.insert_one(doc)
+        await notify.commission_created(tdb, merchant, doc)
+
     try:
-        await db.commissions.insert_one(doc)
+        await run_in_transaction(db, create)
     except DuplicateKeyError:
         return "already earned"
-    await notify.commission_created(db, merchant, doc)
     return f"commission {d.amount_cents} {d.currency}"
 
 
@@ -199,17 +212,19 @@ async def apply_reversal(db: AsyncDatabase, commission: dict, newly_reversed_cen
     inc = {"refunded_cents": newly_reversed_cents}
     if action.kind == "none":
         return "nothing to reverse"
-    if action.kind == "reduce":
-        await db.commissions.update_one({"_id": commission["_id"]}, {"$set": {"amount_cents": action.amount_cents}, "$inc": inc})
-        await notify.commission_updated(db, commission["merchant_id"], commission["_id"])
-        return f"reduced to {action.amount_cents}"
-    if action.kind == "void":
-        await db.commissions.update_one({"_id": commission["_id"]}, {"$set": {"status": "void", "amount_cents": 0, "void_reason": "refunded"}, "$inc": inc})
-        await notify.commission_updated(db, commission["merchant_id"], commission["_id"])
-        return "voided"
+    if action.kind in ("reduce", "void"):
+        change = {"amount_cents": action.amount_cents} if action.kind == "reduce" else {"status": "void", "amount_cents": 0, "void_reason": "refunded"}
+
+        async def update(tdb):
+            await tdb.commissions.update_one({"_id": commission["_id"]}, {"$set": change, "$inc": inc})
+            await notify.commission_updated(tdb, commission["merchant_id"], commission["_id"])
+
+        await run_in_transaction(db, update)
+        return f"reduced to {action.amount_cents}" if action.kind == "reduce" else "voided"
     clawback_id = new_id("com")
-    try:
-        await db.commissions.insert_one(
+
+    async def claw(tdb):
+        await tdb.commissions.insert_one(
             {
                 "_id": clawback_id,
                 "merchant_id": commission["merchant_id"],
@@ -229,10 +244,13 @@ async def apply_reversal(db: AsyncDatabase, commission: dict, newly_reversed_cen
                 "created_at": datetime.now(UTC),
             }
         )
+        await tdb.commissions.update_one({"_id": commission["_id"]}, {"$inc": inc})
+        await notify.commission_updated(tdb, commission["merchant_id"], clawback_id, "commission.created")
+
+    try:
+        await run_in_transaction(db, claw)
     except DuplicateKeyError:
         return "already clawed back"
-    await db.commissions.update_one({"_id": commission["_id"]}, {"$inc": inc})
-    await notify.commission_updated(db, commission["merchant_id"], clawback_id, "commission.created")
     return f"clawback {action.amount_cents}"
 
 

@@ -23,6 +23,7 @@ from .. import deps, plans
 from ..config import get_settings
 from ..ids import sha256
 from ..security import db_dep
+from ..services import audit
 from ..serializers import affiliate_url, join_url, portal_base
 from . import merchant as mr
 from . import server_api as api
@@ -100,6 +101,7 @@ class ProgramUpdate(BaseModel):
     cookie_days: int | None = Field(default=None, ge=1, le=365, description="how long a click counts")
     param_names: list[str] | None = Field(default=None, min_length=1, max_length=5, description="URL parameters the script reads, e.g. ['via', 'ref']")
     auto_approve: bool | None = Field(default=None, description="approve people who join without review")
+    attribution: Literal["first", "last"] | None = Field(default=None, description="first: the first affiliate to refer someone keeps them. last: a newer click, link or code moves them, until their first payment")
 
 
 class AffiliateArgs(BaseModel):
@@ -541,6 +543,7 @@ async def mcp(request: Request):
             {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "Send your program's secret key as Authorization: Bearer sk_kr_... (Kickrail > Settings > Server API key)."}},
             status_code=401,
         )
+    audit.actor.set({"kind": "mcp"})
     try:
         body = json.loads(await request.body())
     except ValueError:

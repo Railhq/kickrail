@@ -128,6 +128,10 @@ async def referral_created(db: AsyncDatabase, merchant_id: str, r: dict) -> None
     await emit(db, merchant_id, "referral.created", referral_obj(r))
 
 
+async def referral_updated(db: AsyncDatabase, merchant_id: str, r: dict, previous_affiliate_id: str) -> None:
+    await emit(db, merchant_id, "referral.updated", referral_obj(r) | {"previous_affiliate_id": previous_affiliate_id})
+
+
 async def referral_converted(db: AsyncDatabase, merchant_id: str, r: dict) -> None:
     await emit(db, merchant_id, "referral.converted", referral_obj(r))
 
@@ -181,3 +185,11 @@ async def payout_event(db: AsyncDatabase, merchant_id: str, type_: str, payout_i
     if p:
         await emit(db, merchant_id, type_, payout_obj(p))
 
+
+
+async def referral_deleted(db: AsyncDatabase, merchant_id: str, r: dict) -> None:
+    await emit(db, merchant_id, "referral.deleted", referral_obj(r) | {"deleted": True})
+
+
+async def commission_deleted(db: AsyncDatabase, merchant_id: str, c: dict) -> None:
+    await emit(db, merchant_id, "commission.deleted", commission_obj(c) | {"deleted": True})

@@ -2,8 +2,9 @@
 
 Signals, strongest first: the click id from the tracking cookie, the ?via= token,
 a Stripe promotion code redeemed at checkout, a creator code typed at signup.
-First referral wins: once a person is attributed, another affiliate's later click
-does not take them.
+By default the first referral wins: once a person is attributed, another affiliate's
+later click does not take them. A program can switch to last touch, where a newer
+click, link or code moves a person to that affiliate until their first payment.
 
 An affiliate can have extra links (affiliate_links, each its own token and landing
 page) and extra codes (affiliate_codes); they resolve exactly like the main ones.
@@ -20,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 
+from ..db import run_in_transaction
 from ..domain.fraud import canonical_email, self_referral_flags
 from ..ids import new_id
 from . import notify
@@ -130,7 +132,37 @@ async def _is_team_email(db: AsyncDatabase, merchant: dict, email: str) -> bool:
     return False
 
 
-async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, customer_created=None) -> tuple[dict, bool] | None:
+async def _last_touch(db: AsyncDatabase, merchant: dict, existing: dict, inp: AttachInput, email: str | None) -> dict:
+    """Under last-touch attribution, the fields that move an unpaid referral to the
+    affiliate behind a newer click, link or code. Empty when it stays put."""
+    if (merchant.get("settings") or {}).get("attribution") != "last":
+        return {}
+    if existing.get("first_paid_at") or existing.get("rejected") or not (inp.click_id or inp.token or inp.code or inp.promotion_code_id):
+        return {}
+    hit = await resolve_affiliate(db, merchant["_id"], inp)
+    if not hit or hit[0]["_id"] == existing["affiliate_id"]:
+        return {}
+    affiliate, source, click_id = hit
+    click = await db.clicks.find_one({"_id": click_id}, {"test": 1}) if click_id else None
+    # A test click never takes a real referral.
+    if click and click.get("test") and not existing.get("test"):
+        return {}
+    aff_user = await db.users.find_one({"_id": affiliate["user_id"]})
+    who = email or existing.get("email")
+    flags = self_referral_flags(aff_user["email"], aff_user.get("ip_hashes", []), who, inp.ip_hash) if aff_user else []
+    return {
+        "affiliate_id": affiliate["_id"],
+        "campaign_id": affiliate["campaign_id"],
+        "click_id": click_id,
+        "source": source,
+        "flags": flags,
+        "flags_cleared": False,
+        "test": bool(click and click.get("test")),
+        "moved_at": datetime.now(UTC),
+    }
+
+
+async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, customer_created=None, _retry: bool = True) -> tuple[dict, bool] | None:
     """Returns (referral, created) or None when nothing points at an approved affiliate.
     `customer_created(customer_id)` gives a Stripe customer's creation time, for the
     auto-lead check."""
@@ -140,16 +172,38 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
         weak = existing.get("auto") and not existing.get("stripe_customer_id") and not (inp.click_id or inp.token)
         if weak and inp.stripe_customer_id and customer_created and await _older_customer(db, existing, inp.stripe_customer_id, customer_created):
             return None
-        fill = {}
+        fill = await _last_touch(db, merchant, existing, inp, email)
         if email and not existing.get("email"):
             fill["email"] = email
         if inp.external_user_id and not existing.get("external_user_id"):
             fill["external_user_id"] = inp.external_user_id
         if inp.stripe_customer_id and not existing.get("stripe_customer_id"):
             fill["stripe_customer_id"] = inp.stripe_customer_id
-        if fill:
-            await db.referrals.update_one({"_id": existing["_id"]}, {"$set": fill})
-        return {**existing, **fill}, False
+        if not fill:
+            return existing, False
+        moved = "affiliate_id" in fill
+        if (moved and existing.get("stripe_customer_id")) or "stripe_customer_id" in fill:
+            fill["stripe_sync_due"] = True
+        updated = {**existing, **fill}
+        update: dict = {"$set": fill}
+        if moved:
+            update["$push"] = {"previous_affiliates": {"affiliate_id": existing["affiliate_id"], "click_id": existing.get("click_id"), "until": fill["moved_at"]}}
+            if not fill.get("test"):
+                update["$unset"] = {"test": ""}
+                updated.pop("test", None)
+            fill.pop("test", None)
+
+        async def save(tdb):
+            await tdb.referrals.update_one({"_id": existing["_id"]}, update)
+            if moved:
+                await notify.referral_updated(tdb, merchant["_id"], updated, existing["affiliate_id"])
+
+        try:
+            await run_in_transaction(db, save)
+        except DuplicateKeyError:
+            # Another referral already holds one of these ids; keep both as they are.
+            return existing, False
+        return updated, False
 
     hit = await resolve_affiliate(db, merchant["_id"], inp)
     if not hit:
@@ -177,12 +231,22 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
         "auto": inp.auto or None,
         # Came through a kr_test=1 link: shown to the merchant, left out of counts and commissions.
         "test": True if click and click.get("test") else None,
+        "stripe_sync_due": True if inp.stripe_customer_id else None,
         "created_at": datetime.now(UTC),
     }
     # Sparse indexes skip missing fields, not nulls, so drop the empty ones.
     referral = {k: v for k, v in referral.items() if v is not None or k in ("first_paid_at",)}
-    await db.referrals.insert_one(referral)
-    await notify.referral_created(db, merchant["_id"], referral)
+    async def create(tdb):
+        await tdb.referrals.insert_one(referral)
+        await notify.referral_created(tdb, merchant["_id"], referral)
+
+    try:
+        await run_in_transaction(db, create)
+    except DuplicateKeyError:
+        # A concurrent request (say the browser script and the merchant's server) won the race.
+        if not _retry:
+            raise
+        return await attach_referral(db, merchant, inp, customer_created, _retry=False)
     # A form the script picked up on its own may be a newsletter box, not a signup.
     if not inp.auto and not referral.get("test"):
         await award_lead_bounty(db, merchant, referral)
@@ -214,9 +278,12 @@ async def award_lead_bounty(db: AsyncDatabase, merchant: dict, referral: dict) -
         "due_at": now + timedelta(days=campaign["hold_days"]),
         "created_at": now,
     }
+    async def create(tdb):
+        await tdb.commissions.insert_one(doc)
+        await notify.commission_created(tdb, merchant, doc)
+
     try:
-        await db.commissions.insert_one(doc)
+        await run_in_transaction(db, create)
     except DuplicateKeyError:
         return None
-    await notify.commission_created(db, merchant, doc)
     return doc

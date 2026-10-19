@@ -95,6 +95,7 @@ export async function updateSettings(_: State, f: FormData): Promise<State> {
         auto_approve: f.get("auto_approve") === "on",
         affiliate_links: f.get("affiliate_links") === "on",
         require_tax_form: f.get("require_tax_form") === "on",
+        attribution: f.get("attribution") === "last" ? "last" : "first",
       },
     }),
   );
@@ -293,6 +294,12 @@ export async function setAffiliateStatus(id: string, status: string) {
 export async function reviewReferral(id: string, verdict: "clear" | "reject") {
   await api(`/merchant/referrals/${id}/${verdict}`, { method: "POST" });
   revalidatePath("/dashboard", "layout");
+}
+
+export async function deleteRecord(kind: "referrals" | "commissions", id: string, reason: string): Promise<State> {
+  const r = await attempt(() => api(`/merchant/${kind}/${id}`, { method: "DELETE", body: { reason: reason.trim() || null } }));
+  revalidatePath("/dashboard", "layout");
+  return r.error ? { error: r.error } : { ok: "Deleted" };
 }
 
 // ---------- team ----------
