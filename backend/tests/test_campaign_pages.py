@@ -114,3 +114,18 @@ async def test_swapping_the_coupon_moves_codes_and_old_codes_still_attribute(cli
     assert r.status_code == 200 and dog_codes() == set()
     aff = await db.affiliates.find_one({"_id": a["id"]})
     assert aff["code"] == "DOGCAST" and not aff.get("stripe_promotion_code_id")
+
+
+async def test_one_live_stripe_account_serves_one_program(client, db):
+    keys = {}
+    for name in ("Shopone", "Shoptwo"):
+        tok = await signup(client, db, f"owner@{name.lower()}.example", name)
+        r = await client.post("/merchant", json={"name": name, "website": f"https://{name.lower()}.example"}, headers=auth(tok))
+        keys[name] = auth(tok)
+    assert (await client.post("/merchant/stripe", json={"restricted_key": "rk_live_shared"}, headers=keys["Shopone"])).status_code == 200
+    r = await client.post("/merchant/stripe", json={"restricted_key": "rk_live_shared"}, headers=keys["Shoptwo"])
+    assert r.status_code == 409 and "Shopone" in r.json()["detail"]
+    # Reconnecting the same program is fine, and test keys may share a sandbox.
+    assert (await client.post("/merchant/stripe", json={"restricted_key": "rk_live_shared"}, headers=keys["Shopone"])).status_code == 200
+    assert (await client.post("/merchant/stripe", json={"restricted_key": "rk_test_sandbox"}, headers=keys["Shopone"])).status_code == 200
+    assert (await client.post("/merchant/stripe", json={"restricted_key": "rk_test_sandbox"}, headers=keys["Shoptwo"])).status_code == 200
