@@ -56,14 +56,15 @@ export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="rounded-xl border border-dashed border-stone-300 bg-[repeating-linear-gradient(135deg,transparent_0_8px,rgba(0,0,0,0.018)_8px_16px)] p-8 text-center text-sm text-muted">{children}</p>;
 }
 
-export function Table({ head, children }: { head: React.ReactNode[]; children: React.ReactNode }) {
+// compact: tighter cell padding for wide tables; rows should use "px-3 first:pl-5 last:pr-5" cells.
+export function Table({ head, children, compact }: { head: React.ReactNode[]; children: React.ReactNode; compact?: boolean }) {
   return (
-    <div className="-mx-5 -mb-5 overflow-x-auto [&:nth-child(2)]:-mt-5">
+    <div className="-mx-5 -mb-5 overflow-x-auto first:-mt-5 [&:nth-child(2)]:-mt-5">
       <table className="w-full min-w-[640px] text-sm">
         <thead>
           <tr className="border-b border-line bg-sunk/50 text-left">
             {head.map((h, i) => (
-              <th key={i} className="eyebrow px-5 py-2.5 font-normal">
+              <th key={i} className={`eyebrow py-2.5 font-normal ${compact ? "px-3 first:pl-5 last:pr-5" : "px-5"}`}>
                 {h}
               </th>
             ))}
