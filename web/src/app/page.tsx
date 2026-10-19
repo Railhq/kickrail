@@ -28,6 +28,7 @@ export default function Landing() {
         <nav className="flex items-center gap-2 text-sm">
           <a href="#pricing" className="btn hidden hover:bg-sunk sm:inline-flex">Pricing</a>
           <Link href="/docs" className="btn hidden hover:bg-sunk sm:inline-flex">Docs</Link>
+          <a href="/blog" className="btn hidden hover:bg-sunk sm:inline-flex">Blog</a>
           <Link href="/login" className="btn hover:bg-sunk">Sign in</Link>
           <Link href="/signup" className="btn btn-primary">Start a program</Link>
         </nav>
@@ -123,6 +124,17 @@ export default function Landing() {
           <Link href="/signup" className="btn btn-signal px-5 py-3 text-[15px]">Create your program →</Link>
         </section>
       </main>
+
+      <footer className="border-t border-line">
+        <div className="mx-auto flex max-w-6xl flex-wrap gap-x-8 gap-y-2 px-4 py-10 text-sm text-muted sm:px-6">
+          <span>Kickrail · affiliate tracking for Stripe SaaS</span>
+          <Link href="/docs" className="hover:text-fg">Docs</Link>
+          <a href="/blog" className="hover:text-fg">Blog</a>
+          <Link href="/docs/switching" className="hover:text-fg">Switching from Rewardful</Link>
+          <Link href="/docs/mcp" className="hover:text-fg">MCP server</Link>
+          <a href="/blog/rewardful-alternatives" className="hover:text-fg">Rewardful alternatives</a>
+        </div>
+      </footer>
     </div>
   );
 }

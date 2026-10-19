@@ -51,7 +51,9 @@ export function JoinView({ p }: { p: Program }) {
       </div>
       {p.powered_by && (
         <p className="mt-6 text-center text-xs text-muted">
-          Powered by <a className="underline" href="https://kickrail.com" target="_blank" rel="noopener">Kickrail</a>
+          Powered by <a className="underline" href="https://kickrail.com/?utm_source=powered_by&utm_medium=portal" target="_blank" rel="noopener">Kickrail</a>
+          {" · "}
+          <a className="underline" href="https://kickrail.com/signup?utm_source=powered_by&utm_medium=portal" target="_blank" rel="noopener">Run your own affiliate program</a>
         </p>
       )}
     </div>
