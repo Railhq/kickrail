@@ -13,11 +13,12 @@ export function Card({ title, children, actions, className = "", id }: { title?:
 }
 
 /** A single stat, laid out to sit inside a StatGroup. */
-export function Stat({ label, value, hint, big }: { label: string; value: React.ReactNode; hint?: React.ReactNode; big?: boolean }) {
+export function Stat({ label, value, sub, hint, big }: { label: string; value: React.ReactNode; sub?: React.ReactNode; hint?: React.ReactNode; big?: boolean }) {
   return (
     <div className="min-w-0 px-5 py-4">
       <p className="eyebrow">{label}</p>
       <p className={`mt-2 truncate leading-none ${big ? "font-display text-[2.6rem]" : "num text-2xl font-medium"}`}>{value}</p>
+      {sub && <p className="mt-2 text-sm tabular-nums text-muted">{sub}</p>}
       {hint && <p className="mt-2 text-xs text-muted">{hint}</p>}
     </div>
   );

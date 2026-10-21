@@ -81,7 +81,7 @@ async def test_script_and_test_link(client):
     assert d["last_test"]["url"].startswith("https://acme.io/") and d["clicks"] == 0
     # A signup through the test link is kept, marked as a test, and not counted.
     await client.post("/track/lead", content=f'{{"key":"{S["pk"]}","id":"kr_testclick0000000001","email":"tester@example.com"}}')
-    refs = (await client.get("/merchant/referrals", headers=auth(S["owner"]))).json()
+    refs = (await client.get("/merchant/referrals", headers=auth(S["owner"]))).json()["items"]
     assert [(r["email"], r.get("test")) for r in refs] == [("tester@example.com", True)]
     assert (await client.get(f"/portal/{S['aff_id']}", headers=auth(S["aff"]))).json()["leads"] == 0
     assert (await client.get("/merchant/overview", headers=auth(S["owner"]))).json()["leads"] == 0
@@ -90,7 +90,7 @@ async def test_script_and_test_link(client):
     assert (await client.get(f"/portal/{S['aff_id']}", headers=auth(S["aff"]))).json()["clicks"] == 1
     # The program's own team signing up through a real link is not a referral.
     await client.post("/track/lead", content=f'{{"key":"{S["pk"]}","id":"kr_testclick0000000001","email":"Founder+demo@acme.io"}}')
-    assert len((await client.get("/merchant/referrals", headers=auth(S["owner"]))).json()) == 1
+    assert (await client.get("/merchant/referrals", headers=auth(S["owner"]))).json()["total"] == 1
     await client.post("/track/click", content=f'{{"key":"{S["pk"]}","id":"kr_testclick0000000001","token":"{S["token"]}","url":"https://acme.io/?via=x"}}')
     assert (await client.get(f"/portal/{S['aff_id']}", headers=auth(S["aff"]))).json()["clicks"] == 1
 
@@ -156,7 +156,7 @@ async def test_self_referral_is_held_for_review(client, db):
     r = await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", {"id": "in_self", "customer": "cus_self", "amount_paid": 10000, "currency": "usd", "status_transitions": {"paid_at": paid}})
     assert r.json()["outcome"] == "commission 3000 usd"
     assert (await db.commissions.find_one({"source_key": "inv:in_self"}))["held"] is True
-    flagged = (await client.get("/merchant/referrals?flagged=true", headers=auth(S["owner"]))).json()
+    flagged = (await client.get("/merchant/referrals?flagged=true", headers=auth(S["owner"]))).json()["items"]
     assert [f["id"] for f in flagged] == [S["self_ref"]]
 
 
@@ -252,6 +252,38 @@ async def test_overview_and_tenant_isolation(client):
     assert o["affiliates"] == 2 and o["customers"] == 3 and o["installed"]
     # The affiliate has no merchant workspace and can't read Acme's data
     assert (await client.get("/merchant/commissions", headers=auth(S["aff"]))).status_code == 404
+
+
+async def test_referral_search_pages_and_detail(client, db):
+    h = auth(S["owner"])
+    found = (await client.get("/merchant/referrals?q=BIGCO.com", headers=h)).json()
+    assert [r["id"] for r in found["items"]] == [S["ref_id"]] and found["total"] == 1
+    assert (await client.get("/merchant/referrals?q=cus_1", headers=h)).json()["total"] >= 1
+    # Searching by the affiliate's link name finds their referrals; a regex in the box is just text.
+    assert (await client.get(f"/merchant/referrals?q={S['token']}", headers=h)).json()["total"] >= 1
+    assert (await client.get("/merchant/referrals?q=.*", headers=h)).json()["total"] == 0
+    assert all(r["status"] == "lead" for r in (await client.get("/merchant/referrals?status=lead", headers=h)).json()["items"])
+
+    d = (await client.get(f"/merchant/referrals/{S['ref_id']}", headers=h)).json()
+    assert d["email"] == "buyer@bigco.com" and d["affiliate"]["token"] == S["token"] and d["campaign"]["name"]
+    assert d["click"]["landing_url"].startswith("https://acme.io/") and "ip_hash" not in d["click"] and "user_agent" not in d["click"]
+    assert d["commissions"] and all(c["referral_id"] == S["ref_id"] for c in d["commissions"])
+    assert (await client.get("/merchant/referrals/ref_nope", headers=h)).status_code == 404
+    assert (await client.get(f"/merchant/referrals/{S['ref_id']}", headers=auth(S["aff"]))).status_code == 404
+
+    c = (await client.get("/merchant/commissions?q=buyer@bigco", headers=h)).json()
+    assert c["total"] >= 1 and all(x["customer"] == "buyer@bigco.com" for x in c["items"])
+
+    # 60 more referrals: pages of 50, newest first, nothing repeated.
+    now = datetime.now(UTC)
+    await db.referrals.insert_many([{"_id": f"ref_page{i:03}", "merchant_id": S["merchant_id"], "affiliate_id": S["aff_id"], "source": "link", "status": "lead", "email": f"page{i:03}@pages.test", "flags": [], "created_at": now - timedelta(minutes=i)} for i in range(60)])
+    try:
+        p1 = (await client.get("/merchant/referrals?q=pages.test", headers=h)).json()
+        p2 = (await client.get("/merchant/referrals?q=pages.test&page=2", headers=h)).json()
+        assert p1["total"] == 60 and len(p1["items"]) == 50 and len(p2["items"]) == 10
+        assert [r["email"] for r in p1["items"] + p2["items"]] == [f"page{i:03}@pages.test" for i in range(60)]
+    finally:
+        await db.referrals.delete_many({"_id": {"$regex": "^ref_page"}})
 
 
 async def test_concurrent_signups_make_one_referral(db):

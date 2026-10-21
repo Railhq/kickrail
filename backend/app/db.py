@@ -104,6 +104,8 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
             ([("merchant_id", A), ("email", A)], {"unique": True, "partialFilterExpression": {"email": {"$type": "string"}}}),
             ([("merchant_id", A), ("external_user_id", A)], {"unique": True, "partialFilterExpression": {"external_user_id": {"$type": "string"}}}),
             ([("merchant_id", A), ("affiliate_id", A), ("created_at", D)], {}),
+            # Dashboard list, newest first.
+            ([("merchant_id", A), ("created_at", D)], {}),
             # Waiting to be written onto the Stripe customer (services/stripe_sync.py).
             ([("stripe_sync_due", A)], {"partialFilterExpression": {"stripe_sync_due": True}}),
         ],
@@ -112,6 +114,8 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
             ([("merchant_id", A), ("status", A), ("due_at", A)], {}),
             ([("merchant_id", A), ("payment_intent_id", A)], {"sparse": True}),
             ([("affiliate_id", A), ("created_at", D)], {}),
+            ([("merchant_id", A), ("created_at", D)], {}),
+            ([("referral_id", A)], {"sparse": True}),
             # payout.due sweep, across programs.
             ([("status", A), ("due_at", A)], {"partialFilterExpression": {"status": "pending"}}),
         ],

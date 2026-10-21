@@ -110,8 +110,8 @@ export type Affiliate = {
   clicks: number;
   leads: number;
   customers: number;
-  earned_cents: number;
-  paid_cents: number;
+  earned: Record<string, number>;
+  paid: Record<string, number>;
   links: AffiliateLink[];
   codes: AffiliateCode[];
   tax_form: "w9" | "w8ben" | "w8bene" | null;
@@ -134,7 +134,19 @@ export type Referral = {
   flags_cleared?: boolean;
   rejected?: boolean;
   test?: boolean;
+  first_paid_at?: string | null;
+  rewardful_id?: string;
   created_at: string;
+};
+
+/** One page of a dashboard list. */
+export type Page<T> = { items: T[]; total: number; page: number; page_size: number };
+
+export type ReferralDetail = Referral & {
+  affiliate: { id: string; name: string; email: string; token: string };
+  campaign: { id: string; name: string } | null;
+  click: { token: string; landing_url: string; referrer: string; created_at: string } | null;
+  commissions: Commission[];
 };
 
 export type Commission = {
@@ -150,6 +162,8 @@ export type Commission = {
   source_key: string;
   void_reason?: string;
   payout_id?: string;
+  referral_id?: string;
+  customer?: string | null;
   created_at: string;
 };
 

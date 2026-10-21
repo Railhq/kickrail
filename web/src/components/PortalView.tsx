@@ -3,7 +3,7 @@ import { addOwnLink, changeToken, deleteOwnLink } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge, Card, Empty, Notice, Stat, StatGroup, StatusBadge, Table } from "@/components/ui";
-import { date, money, moneyMap, relative } from "@/lib/format";
+import { date, mainCurrency, money, relative, splitMoney } from "@/lib/format";
 import type { PortalView as View } from "@/lib/types";
 
 /**
@@ -12,6 +12,8 @@ import type { PortalView as View } from "@/lib/types";
  */
 export function PortalView({ d, preview = false, back }: { d: View; preview?: boolean; back?: React.ReactNode }) {
   const pick = (k: "in_hold" | "payable" | "paid") => Object.fromEntries(Object.entries(d.totals).map(([c, v]) => [c, v[k]]));
+  const cur = mainCurrency(pick("in_hold"), pick("payable"), pick("paid"));
+  const bal = { in_hold: splitMoney(pick("in_hold"), cur), payable: splitMoney(pick("payable"), cur), paid: splitMoney(pick("paid"), cur) };
   const nextRelease = d.commissions.filter((c) => c.status === "pending" && !c.held_for_review && new Date(c.due_at) > new Date()).map((c) => c.due_at).sort()[0];
   const b = d.program.branding ?? {};
   const accent = b.color ?? undefined;
@@ -120,17 +122,20 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
       <section className="grid gap-px overflow-hidden rounded-2xl border border-ink bg-ink-line sm:grid-cols-3">
         <div className="bg-ink px-5 py-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted">In hold</p>
-          <p className="mt-2 truncate font-display text-[2.6rem] leading-none text-white">{moneyMap(pick("in_hold"))}</p>
+          <p className="mt-2 truncate font-display text-[2.6rem] leading-none text-white">{bal.in_hold.main}</p>
+          {bal.in_hold.rest && <p className="mt-2 text-sm tabular-nums text-ink-muted">{bal.in_hold.rest}</p>}
           <p className="mt-2 text-xs text-ink-muted">{nextRelease ? `next release ${relative(nextRelease)}` : d.program.hold_days ? `released ${d.program.hold_days} days after payment` : "nothing waiting"}</p>
         </div>
         <div className="bg-ink px-5 py-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted">Payable</p>
-          <p className="mt-2 truncate font-display text-[2.6rem] leading-none text-signal" style={accent ? { color: accent } : undefined}>{moneyMap(pick("payable"))}</p>
+          <p className="mt-2 truncate font-display text-[2.6rem] leading-none text-signal" style={accent ? { color: accent } : undefined}>{bal.payable.main}</p>
+          {bal.payable.rest && <p className="mt-2 text-sm tabular-nums text-ink-muted">{bal.payable.rest}</p>}
           <p className="mt-2 text-xs text-ink-muted">{`paid out once you reach ${money(d.min_payout_cents)}`}</p>
         </div>
         <div className="bg-ink px-5 py-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted">Paid to you</p>
-          <p className="mt-2 truncate font-display text-[2.6rem] leading-none text-white">{moneyMap(pick("paid"))}</p>
+          <p className="mt-2 truncate font-display text-[2.6rem] leading-none text-white">{bal.paid.main}</p>
+          {bal.paid.rest && <p className="mt-2 text-sm tabular-nums text-ink-muted">{bal.paid.rest}</p>}
           <p className="mt-2 text-xs text-ink-muted">all time</p>
         </div>
       </section>

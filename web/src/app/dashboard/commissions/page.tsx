@@ -1,23 +1,25 @@
-import { DeleteButton } from "@/components/DeleteButton";
-import { Badge, Card, Empty, StatusBadge, Table } from "@/components/ui";
+import Link from "next/link";
+import { CommissionTable } from "@/components/CommissionTable";
+import { listHref, Pager, SearchBox } from "@/components/ListControls";
+import { Card, Empty } from "@/components/ui";
 import { api } from "@/lib/backend";
-import { date, money, relative } from "@/lib/format";
-import type { Commission } from "@/lib/types";
+import type { Commission, Page } from "@/lib/types";
 
 export const metadata = { title: "Commissions" };
 
-// Stripe ids run to 60+ characters; show the start and keep the full id on hover.
-const stripeId = (id: string) => <span className="block max-w-44 truncate font-mono text-xs" title={id}>{id}</span>;
+const PATH = "/dashboard/commissions";
+const STATUSES: [string, string][] = [["", "All"], ["pending", "Unpaid"], ["paid", "Paid"], ["void", "Void"]];
 
-function source(key: string) {
-  if (key.startsWith("inv:")) return stripeId(key.slice(4));
-  if (key.startsWith("cs:")) return stripeId(key.slice(3));
-  if (key.startsWith("clawback:")) return <span className="text-xs">refund after payout</span>;
-  return key;
-}
-
-export default async function CommissionsPage() {
-  const rows = await api<Commission[]>("/merchant/commissions");
+export default async function CommissionsPage({ searchParams }: { searchParams: Promise<{ status?: string; q?: string; page?: string }> }) {
+  const sp = await searchParams;
+  const status = STATUSES.some(([v]) => v && v === sp.status) ? sp.status : undefined;
+  const page = Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1);
+  const q = sp.q?.trim() || undefined;
+  const qs = new URLSearchParams({ page: String(page) });
+  if (status) qs.set("status", status);
+  if (q) qs.set("q", q);
+  const res = await api<Page<Commission>>(`/merchant/commissions?${qs}`);
+  const params = { status, q };
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -25,32 +27,22 @@ export default async function CommissionsPage() {
         <a className="btn btn-secondary" href="/api/merchant/export/commissions.csv" download>Export CSV</a>
       </div>
       <p className="text-sm text-muted">Refunds and disputes shrink or void unpaid commissions automatically. If the commission was already paid, a negative line is netted from that affiliate&apos;s next payout. You can delete an unpaid commission that isn&apos;t in a payout; every delete is recorded in the audit log.</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <SearchBox path={PATH} params={params} placeholder="Customer email, affiliate or Stripe invoice" />
+        <div className="flex flex-wrap gap-1 text-sm">
+          {STATUSES.map(([value, label]) => (
+            <Link key={label} href={listHref(PATH, { status: value, q })} className={`btn ${(status ?? "") === value ? "btn-primary" : "btn-secondary"}`}>{label}</Link>
+          ))}
+        </div>
+      </div>
       <Card>
-        {rows.length === 0 ? (
-          <Empty>No commissions yet. They are created when a referred customer pays.</Empty>
+        {res.items.length === 0 ? (
+          <Empty>{q ? `Nothing matches “${q}”.` : status ? "No commissions here." : "No commissions yet. They are created when a referred customer pays."}</Empty>
         ) : (
-          <Table head={["Affiliate", "Amount", "On payment", "Status", "Payable", "Source", ""]}>
-            {rows.map((c) => (
-              <tr key={c.id}>
-                <td className="px-5 py-3">{c.affiliate_name}</td>
-                <td className={`px-5 py-3 num ${c.amount_cents < 0 ? "text-red-700" : ""}`}>{money(c.amount_cents, c.currency)}</td>
-                <td className="px-5 py-3 num text-muted">{c.base_cents > 0 ? money(c.base_cents, c.currency) : ""}</td>
-                <td className="px-5 py-3">
-                  <StatusBadge status={c.status} />
-                  {c.held && c.status === "pending" && <span className="ml-1"><Badge tone="amber">held for review</Badge></span>}
-                  {c.payout_id && c.status === "pending" && <span className="ml-1"><Badge tone="blue">in payout</Badge></span>}
-                  {c.void_reason && <p className="mt-1 text-xs text-muted">{c.void_reason}</p>}
-                </td>
-                <td className="px-5 py-3 text-muted">{c.status === "pending" ? (new Date(c.due_at) > new Date() ? relative(c.due_at) : "now") : c.status === "paid" ? "paid" : ""}</td>
-                <td className="px-5 py-3 text-muted">{source(c.source_key)}<p className="text-xs">{date(c.created_at)}</p></td>
-                <td className="px-5 py-3 text-right">
-                  {c.status !== "paid" && !c.payout_id && <DeleteButton kind="commissions" id={c.id} confirmText={`Delete this ${money(c.amount_cents, c.currency)} commission for ${c.affiliate_name}? It's kept in your audit log, and the same payment won't earn it again. Add a reason (optional):`} />}
-                </td>
-              </tr>
-            ))}
-          </Table>
+          <CommissionTable rows={res.items} />
         )}
       </Card>
+      <Pager path={PATH} params={params} page={res.page} total={res.total} pageSize={res.page_size} />
     </div>
   );
 }
