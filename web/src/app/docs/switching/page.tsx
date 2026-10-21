@@ -33,6 +33,13 @@ export default function Switching() {
         ]}
       />
 
+      <H2>Importing only some affiliates</H2>
+      <P>
+        Rewardful can enroll every customer as an affiliate, so a program can hold thousands of affiliates who never promote it. To bring over only your partners, list them under <b>Only these
+        affiliates</b>, by email or Rewardful affiliate id, one per line. Kickrail then copies just those affiliates, the campaigns they belong to, and their links, codes, referrals, commissions and
+        paid payouts. Names it can&apos;t find in Rewardful are listed in the import&apos;s notes. Leave the box empty to import everything.
+      </P>
+
       <H2>Running it again</H2>
       <P>
         Every imported record remembers its Rewardful id, so a second run updates what&apos;s there instead of adding copies. Run it once more right before you remove Rewardful&apos;s script to pick up

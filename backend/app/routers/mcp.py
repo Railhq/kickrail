@@ -11,7 +11,7 @@ import ipaddress
 import json
 import socket
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -127,6 +127,7 @@ class DomainArgs(BaseModel):
 class ImportArgs(BaseModel):
     api_secret: str = Field(min_length=10, max_length=200, description="the Rewardful API secret, from Rewardful > Company settings. Used for this import only, never stored.")
     send_claim_emails: bool = Field(default=False, description="email each affiliate a link to set a Kickrail password")
+    only: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=100, description="import only these affiliates, by email or Rewardful affiliate id, with their campaigns, referrals, commissions and payouts. Empty imports the whole program.")
 
 
 # ---------- helpers ----------
@@ -403,7 +404,7 @@ async def start_rewardful_import(request: Request, db, m: dict, a: ImportArgs) -
     owner = await db.users.find_one({"_id": m.get("owner_id")})
     if not owner:
         raise HTTPException(409, "the program has no owner account")
-    body = mr.RewardfulImportIn(api_secret=a.api_secret, send_claim_emails=a.send_claim_emails)
+    body = mr.RewardfulImportIn(api_secret=a.api_secret, send_claim_emails=a.send_claim_emails, only=a.only)
     out = await mr.import_rewardful(body, m=m, user=owner, db=db, client=_dep(request, deps.rewardful_client))
     return out | {"then": "call import_status until status is done"}
 
@@ -457,7 +458,7 @@ TOOLS: dict[str, tuple] = {
     "list_portal_domains": (list_portal_domains, NoArgs, "Custom domains for the join page and affiliate portal, with status (not_verified, waiting_for_https, live) and the DNS record each needs.", True),
     "add_portal_domain": (add_portal_domain, DomainArgs, "Serve the join page and affiliate portal from the user's own subdomain. Returns the CNAME record to create. Starter plan and up.", False),
     "check_portal_domain": (check_portal_domain, DomainArgs, "Check a portal domain's DNS and HTTPS, like the Check DNS button. Run it after the CNAME is added.", False),
-    "start_rewardful_import": (start_rewardful_import, ImportArgs, "Copy campaigns, affiliates, links, codes, referrals and commissions from Rewardful. Affiliates' existing links keep working.", False),
+    "start_rewardful_import": (start_rewardful_import, ImportArgs, "Copy campaigns, affiliates, links, codes, referrals and commissions from Rewardful, or only some affiliates' (only). Affiliates' existing links keep working.", False),
     "import_status": (import_status, NoArgs, "Progress of the latest Rewardful import.", True),
 }
 

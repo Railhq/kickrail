@@ -9,7 +9,7 @@ import pytest
 from app import deps
 from app.main import app
 from app.services.payouts import payable
-from app.services.rewardful_import import RewardfulError
+from app.services.rewardful_import import RewardfulError, RewardfulNotFound
 
 
 def auth(token):
@@ -87,12 +87,27 @@ class FakeRewardful:
         if self.secret == "bad-secret-123":
             raise RewardfulError("Rewardful didn't accept that API secret")
         FakeRewardful.calls.append((path, params))
+        if path.startswith("/affiliates/"):
+            hit = next((a for a in AFFILIATES if a["id"] == path.split("/")[-1]), None)
+            if not hit:
+                raise RewardfulNotFound(f"Rewardful has nothing at {path}")
+            return hit
+        if path == "/affiliates":
+            # Rewardful matches the email exactly, ignoring case.
+            email = dict(params).get("email", "")
+            return {"data": [a for a in AFFILIATES if a["email"].lower() == email.lower()], "pagination": {}}
         return {"data": [], "pagination": {}}
 
     async def pages(self, path, params=()):
         FakeRewardful.calls.append((path, list(params)))
         rows = {"/campaigns": CAMPAIGNS, "/affiliates": AFFILIATES, "/affiliate_coupons": [{"affiliate_id": "a-2", "token": "BOBX", "external_id": "promo_bobx"}],
                 "/referrals": REFERRALS, "/commissions": COMMISSIONS, "/payouts": PAYOUTS}[path]
+        if aff := dict(params).get("affiliate_id"):
+            owner = {"/affiliate_coupons": lambda r: r["affiliate_id"], "/referrals": lambda r: r["affiliate"]["id"], "/commissions": lambda r: r["sale"]["affiliate"]["id"],
+                     "/payouts": lambda r: r["affiliate"]["id"]}[path]
+            rows = [r for r in rows if owner(r) == aff]
+        if path == "/referrals" and ("expand[]", "affiliate") not in params:
+            rows = [{k: v for k, v in r.items() if k != "affiliate"} for r in rows]  # as Rewardful does
         for i in range(0, len(rows), 100):
             yield rows[i:i + 100], len(rows)
 
@@ -195,6 +210,40 @@ async def test_import_from_rewardful(client, db, rewardful):
     await client.post("/merchant/import/rewardful", json={"api_secret": "sk_live_rewardful_1", "send_claim_emails": True}, headers=h)
     await wait(client, h)
     assert await db.emails.count_documents({"merchant_id": mid, "subject": {"$regex": "has moved"}}) == len(claims)
+
+
+async def test_import_only_some_affiliates(client, db, rewardful):
+    h = auth(await signup(client, db, "owner3@rwco.example", "Rio"))
+    mid = (await client.post("/merchant", json={"name": "Picky", "website": "https://rwco.example"}, headers=h)).json()["merchant"]["id"]
+    await db.merchants.update_one({"_id": mid}, {"$set": {"plan": {"id": "growth"}}})
+    FakeRewardful.calls.clear()
+
+    only = [" ANN@rw.example", "a-2", "nobody@rw.example", "a-404", "a-2"]
+    r = await client.post("/merchant/import/rewardful", json={"api_secret": "sk_live_rewardful_1", "only": only}, headers=h)
+    assert r.status_code == 200, r.text
+    imp = await wait(client, h)
+    assert imp["status"] == "done", imp
+    assert imp["only"] == ["ann@rw.example", "a-2", "nobody@rw.example", "a-404"]
+    assert any(w.startswith("nobody@rw.example:") for w in imp["warnings"]) and any(w.startswith("a-404:") for w in imp["warnings"])
+    assert imp["counts"] == {"campaigns": 2, "affiliates": 2, "referrals": 3, "commissions": 4, "payouts": 1}
+
+    # Only the two affiliates came over, with their own campaigns, codes and records.
+    assert {a["rewardful_id"] async for a in db.affiliates.find({"merchant_id": mid})} == {"a-1", "a-2"}
+    assert {c.get("rewardful_id") async for c in db.campaigns.find({"merchant_id": mid})} == {"c-main", "c-vip"}
+    bob = await db.affiliates.find_one({"merchant_id": mid, "rewardful_id": "a-2"})
+    assert (await db.affiliate_codes.find_one({"affiliate_id": bob["_id"]}))["code"] == "BOBX"
+    assert await db.referrals.count_documents({"merchant_id": mid}) == 3 and await db.payouts.count_documents({"merchant_id": mid}) == 1
+    # It never walked the whole program: every list call asked for one affiliate.
+    lists = [(p, dict(q)) for p, q in FakeRewardful.calls if p in ("/affiliate_coupons", "/referrals", "/commissions", "/payouts")]
+    assert lists and all(q.get("affiliate_id") in ("a-1", "a-2") for _, q in lists)
+    assert not any(p == "/affiliates" and "email" not in dict(q) for p, q in FakeRewardful.calls)
+
+    # Naming nobody real fails the run without importing anything.
+    await client.post("/merchant/import/rewardful", json={"api_secret": "sk_live_rewardful_1", "only": ["nobody@rw.example"]}, headers=h)
+    imp = await wait(client, h)
+    assert imp["status"] == "failed" and "None of the affiliates" in imp["error"]
+    r = await client.post("/merchant/import/rewardful", json={"api_secret": "sk_live_rewardful_1", "only": ["x"] * 101}, headers=h)
+    assert r.status_code == 422
 
 
 async def test_exports(client, db, rewardful):

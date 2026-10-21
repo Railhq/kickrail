@@ -503,7 +503,12 @@ export async function openExpressDashboard(): Promise<State> {
 
 export async function startRewardfulImport(_: State, f: FormData): Promise<State> {
   // The secret goes straight to the backend for this one run; it isn't kept anywhere.
-  const r = await attempt(() => api("/merchant/import/rewardful", { method: "POST", body: { api_secret: str(f, "api_secret"), send_claim_emails: f.get("send_claim_emails") === "on" } }));
+  const body = {
+    api_secret: str(f, "api_secret"),
+    send_claim_emails: f.get("send_claim_emails") === "on",
+    only: str(f, "only").split(/[\s,;]+/).filter(Boolean),
+  };
+  const r = await attempt(() => api("/merchant/import/rewardful", { method: "POST", body }));
   revalidatePath("/dashboard/settings");
   return r.error ? { error: r.error } : { ok: "Import started" };
 }

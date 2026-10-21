@@ -36,6 +36,7 @@ export function RewardfulImport({ initial }: { initial: Import | null }) {
             <Badge tone={TONE[imp.status]}>{imp.status === "running" ? `importing ${imp.step}` : imp.status}</Badge>
             <span className="text-muted">Started {date(imp.started_at)}{imp.finished_at && `, finished ${date(imp.finished_at)}`}</span>
           </div>
+          {imp.only.length > 0 && <p className="mt-1 text-muted">Only {imp.only.join(", ")}</p>}
           <ul className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-5">
             {STEPS.map((s) => (
               <li key={s}>
@@ -57,6 +58,13 @@ export function RewardfulImport({ initial }: { initial: Import | null }) {
       {!running && (
         <ActionForm action={startRewardfulImport} className="mt-4 space-y-3">
           <input className="input font-mono text-xs" name="api_secret" type="password" autoComplete="off" placeholder="Rewardful API secret" required aria-label="Rewardful API secret" />
+          <label className="block text-sm">
+            <span>Only these affiliates (optional)</span>
+            <textarea className="input mt-1 font-mono text-xs" name="only" rows={2} placeholder={"jane@example.com\nor a Rewardful affiliate id"} />
+            <span className="mt-1 block text-muted">
+              One email or Rewardful affiliate id per line. Kickrail copies just those affiliates with their campaigns and records. Leave it empty to import the whole program.
+            </span>
+          </label>
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" name="send_claim_emails" className="mt-1" />
             <span>

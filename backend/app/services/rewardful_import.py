@@ -7,7 +7,11 @@ running the import again updates what's there instead of adding copies.
 An import is quiet: no webhooks and no emails, apart from the "claim your account" emails
 when the merchant asks for them. Affiliates keep their link tokens (`?via=` is one of
 Kickrail's default link params) and coupon codes, referrals keep their Stripe customer so
-renewals keep crediting, and unpaid commissions stay owed."""
+renewals keep crediting, and unpaid commissions stay owed.
+
+An import can be limited to some affiliates, named by email or Rewardful affiliate id, for
+programs where most Rewardful affiliates aren't partners (Rewardful can enroll every
+customer). Then only those affiliates, their campaigns and their records come over."""
 
 import asyncio
 import logging
@@ -38,6 +42,10 @@ STEPS = ("campaigns", "affiliates", "referrals", "commissions", "payouts")
 
 
 class RewardfulError(Exception):
+    pass
+
+
+class RewardfulNotFound(RewardfulError):
     pass
 
 
@@ -77,6 +85,8 @@ class Rewardful:
             if r.status_code == 429 or r.status_code >= 500:
                 await asyncio.sleep(float(r.headers.get("retry-after") or 0) or min(30, 2**attempt * 2))
                 continue
+            if r.status_code == 404:
+                raise RewardfulNotFound(f"Rewardful has nothing at {path}")
             if r.status_code >= 400:
                 raise RewardfulError(f"Rewardful answered {r.status_code} for {path}")
             return r.json()
@@ -116,8 +126,10 @@ def _duration(c: dict) -> dict:
 
 
 class Run:
-    def __init__(self, db: AsyncDatabase, m: dict, import_id: str, api, send_claims: bool):
+    def __init__(self, db: AsyncDatabase, m: dict, import_id: str, api, send_claims: bool, only: list[str] | None = None):
         self.db, self.m, self.id, self.api, self.send_claims = db, m, import_id, api, send_claims
+        self.only = only or []
+        self.picked: list[dict] | None = None  # the Rewardful affiliates a limited import covers
         self.campaigns_map: dict[str, str] = {}
         self.affiliates_map: dict[str, dict] = {}
         self.referrals_map: dict[str, str] = {}
@@ -140,10 +152,46 @@ class Run:
         await self.db.imports.update_one({"_id": self.id}, {"$set": s})
 
     async def run(self):
+        if self.only:
+            await self.pick()
         for step in STEPS:
             await self.save(step, force=True)
             await getattr(self, step)()
             await self.save(step, force=True)
+
+    async def pick(self):
+        picked: dict[str, dict] = {}
+        expand = [("expand[]", "campaign"), ("expand[]", "links")]
+        for entry in self.only:
+            if "@" in entry:
+                rows = (await self.api.get("/affiliates", [("email", entry), *expand])).get("data") or []
+                # Exact matches only, in case Rewardful ever ignores the filter.
+                rows = [a for a in rows if (a.get("email") or "").strip().lower() == entry]
+            else:
+                try:
+                    rows = [await self.api.get(f"/affiliates/{entry}", expand)]
+                except RewardfulNotFound:
+                    rows = []
+            if not rows:
+                self.warn(f"{entry}: no Rewardful affiliate has that email or id.")
+            for a in rows:
+                picked[a["id"]] = a
+        if not picked:
+            raise RewardfulError("None of the affiliates you named are in Rewardful")
+        self.picked = list(picked.values())
+
+    async def _pages(self, path: str, params: list[tuple[str, str | int]] = ()) -> AsyncIterator[tuple[list[dict], int]]:
+        """Every row, or for a limited import only the picked affiliates' rows."""
+        if self.picked is None:
+            async for page in self.api.pages(path, params):
+                yield page
+            return
+        done = 0
+        for a in self.picked:
+            total = 0
+            async for rows, total in self.api.pages(path, [*params, ("affiliate_id", a["id"])]):
+                yield rows, done + total
+            done += total
 
     # Campaigns -----------------------------------------------------------------
 
@@ -151,8 +199,11 @@ class Run:
         db, m = self.db, self.m
         default = await db.campaigns.find_one({"merchant_id": m["_id"], "is_default": True})
         room = plans.current(m)["campaigns"]
+        wanted = None if self.picked is None else {(a.get("campaign") or {}).get("id") for a in self.picked}
         async for rows, total in self.api.pages("/campaigns"):
             for c in rows:
+                if wanted is not None and c["id"] not in wanted:
+                    continue
                 kr = await db.campaigns.find_one({"merchant_id": m["_id"], "rewardful_id": c["id"]})
                 if not kr and c.get("default") and not default.get("rewardful_id"):
                     kr = default
@@ -243,7 +294,8 @@ class Run:
     async def affiliates(self):
         db, m = self.db, self.m
         default = await db.campaigns.find_one({"merchant_id": m["_id"], "is_default": True}, {"_id": 1})
-        async for rows, total in self.api.pages("/affiliates", [("expand[]", "campaign"), ("expand[]", "links")]):
+        pages = self.api.pages("/affiliates", [("expand[]", "campaign"), ("expand[]", "links")]) if self.picked is None else _once(self.picked)
+        async for rows, total in pages:
             for a in rows:
                 try:
                     await self._affiliate(a, default["_id"])
@@ -321,7 +373,7 @@ class Run:
     async def coupons(self):
         """Affiliates can hold more than the one coupon their record shows."""
         db = self.db
-        async for rows, _ in self.api.pages("/affiliate_coupons"):
+        async for rows, _ in self._pages("/affiliate_coupons"):
             for c in rows:
                 code = (c.get("token") or "").strip().upper()[:40]
                 hit = await self._aff(c.get("affiliate_id"))
@@ -345,8 +397,9 @@ class Run:
 
     async def referrals(self):
         db, m = self.db, self.m
-        params = [("conversion_state[]", "lead"), ("conversion_state[]", "conversion")]
-        async for rows, total in self.api.pages("/referrals", params):
+        # Rewardful leaves the affiliate off a referral unless it's expanded.
+        params = [("conversion_state[]", "lead"), ("conversion_state[]", "conversion"), ("expand[]", "affiliate")]
+        async for rows, total in self._pages("/referrals", params):
             for r in rows:
                 aff = await self._aff((r.get("affiliate") or {}).get("id"))
                 if not aff:
@@ -405,7 +458,7 @@ class Run:
     async def commissions(self):
         db, m = self.db, self.m
         now = datetime.now(UTC)
-        async for rows, total in self.api.pages("/commissions", [("expand[]", "sale"), ("expand[]", "campaign")]):
+        async for rows, total in self._pages("/commissions", [("expand[]", "sale"), ("expand[]", "campaign")]):
             for c in rows:
                 sale = c.get("sale") or {}
                 aff = await self._aff((sale.get("affiliate") or {}).get("id"))
@@ -415,7 +468,7 @@ class Run:
                 state = c.get("state")
                 status = {"paid": "paid", "voided": "void"}.get(state, "pending")
                 key = f"rw:{c['id']}"
-                existing = await db.commissions.find_one({"merchant_id": m["_id"], "source_key": key}, {"status": 1, "payout_id": 1})
+                existing = await db.commissions.find_one({"merchant_id": m["_id"], "source_key": key}, {"status": 1, "payout_id": 1, "referral_id": 1})
                 fields = {
                     "amount_cents": int(c.get("amount") or 0),
                     "currency": (c.get("currency") or "usd").lower(),
@@ -427,6 +480,8 @@ class Run:
                     # Paid out of Kickrail since the last import: Kickrail's record wins.
                     if existing.get("payout_id") and not str(existing["payout_id"]).startswith("rw"):
                         continue
+                    if not existing.get("referral_id") and (referral_id := await self._referral((sale.get("referral") or {}).get("id"))):
+                        fields["referral_id"] = referral_id
                     await db.commissions.update_one({"_id": existing["_id"]}, {"$set": fields})
                 else:
                     referral_id = await self._referral((sale.get("referral") or {}).get("id"))
@@ -464,7 +519,7 @@ class Run:
         """Paid payouts become history. Unpaid ones aren't copied: their commissions stay
         owed and show up on Kickrail's Payouts page."""
         db, m = self.db, self.m
-        async for rows, total in self.api.pages("/payouts", [("state", "paid"), ("expand[]", "affiliate"), ("expand[]", "commissions")]):
+        async for rows, total in self._pages("/payouts", [("state", "paid"), ("expand[]", "affiliate"), ("expand[]", "commissions")]):
             for p in rows:
                 if p.get("state") != "paid":
                     continue
@@ -495,6 +550,10 @@ class Run:
             await self.save("payouts", total)
 
 
+async def _once(rows: list[dict]) -> AsyncIterator[tuple[list[dict], int]]:
+    yield rows, len(rows)
+
+
 def import_out(doc: dict | None) -> dict | None:
     if not doc:
         return None
@@ -510,6 +569,7 @@ def import_out(doc: dict | None) -> dict | None:
         "warnings": doc.get("warnings") or [],
         "error": doc.get("error"),
         "send_claim_emails": doc.get("send_claim_emails", False),
+        "only": doc.get("only") or [],
         "started_at": doc["started_at"],
         "finished_at": doc.get("finished_at"),
     }
@@ -520,18 +580,23 @@ async def running_import(db: AsyncDatabase, merchant_id: str) -> dict | None:
     return doc if doc and (import_out(doc) or {}).get("status") == "running" else None
 
 
-async def start(db: AsyncDatabase, m: dict, user_id: str, send_claims: bool) -> dict:
+def clean_only(entries: list[str]) -> list[str]:
+    """Emails and Rewardful affiliate ids, trimmed, lowercased and without repeats."""
+    return list(dict.fromkeys(e.strip().lower() for e in entries if e.strip()))
+
+
+async def start(db: AsyncDatabase, m: dict, user_id: str, send_claims: bool, only: list[str] | None = None) -> dict:
     now = datetime.now(UTC)
     doc = {
         "_id": new_id("imp"), "merchant_id": m["_id"], "source": "rewardful", "status": "running", "step": STEPS[0],
-        "counts": {}, "totals": {}, "warnings": [], "send_claim_emails": send_claims, "started_by": user_id, "started_at": now, "heartbeat_at": now,
+        "counts": {}, "totals": {}, "warnings": [], "send_claim_emails": send_claims, "only": only or [], "started_by": user_id, "started_at": now, "heartbeat_at": now,
     }
     await db.imports.insert_one(doc)
     return doc
 
 
-async def run_import(db: AsyncDatabase, m: dict, import_id: str, api, send_claims: bool) -> None:
-    run = Run(db, m, import_id, api, send_claims)
+async def run_import(db: AsyncDatabase, m: dict, import_id: str, api, send_claims: bool, only: list[str] | None = None) -> None:
+    run = Run(db, m, import_id, api, send_claims, only)
     try:
         async with api:
             await run.run()

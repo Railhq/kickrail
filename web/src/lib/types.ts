@@ -220,6 +220,7 @@ export type Import = {
   warnings: string[];
   error: string | null;
   send_claim_emails: boolean;
+  only: string[];
   started_at: string;
   finished_at: string | null;
 };
