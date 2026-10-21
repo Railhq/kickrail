@@ -18,7 +18,7 @@ Key facts:
 - Recurring commissions as a percentage or flat amount, for a set number of months or forever, with a hold period before they're payable.
 - Self-referral checks: matching emails, company domains and sign-in IPs are flagged and held for review.
 - Payouts: affiliates save PayPal, Wise or bank details and the merchant pays them and marks them paid, or (Growth and up) pays through Stripe Connect.
-- Imports a whole Rewardful program (campaigns, affiliates, links, codes, referrals, commissions, payouts) from a Rewardful API secret. Existing \`?via=\` links keep working.
+- Imports a whole Rewardful program (campaigns, affiliates, links, codes, referrals, commissions, payouts) from a Rewardful API secret, or only the affiliates you name. Existing \`?via=\` links keep working.
 - 0% transaction fees on every plan.
 - MCP server at ${SITE}/api/mcp lets an AI agent set up campaigns, affiliates, codes and portal domains with a Kickrail API key.
 

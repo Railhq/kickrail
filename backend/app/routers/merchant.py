@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import jwt
@@ -1157,6 +1157,8 @@ class RewardfulImportIn(BaseModel):
     # Used for this run only: never stored, logged or sent back.
     api_secret: str = Field(min_length=10, max_length=200)
     send_claim_emails: bool = False
+    # Emails or Rewardful affiliate ids. Empty imports the whole program.
+    only: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=100)
 
 
 # Running imports, so the event loop doesn't drop them before they finish.
@@ -1178,8 +1180,9 @@ async def import_rewardful(body: RewardfulImportIn, m=Depends(current_merchant),
     except rewardful_import.RewardfulError as e:
         await api.__aexit__(None, None, None)
         raise HTTPException(400, str(e))
-    doc = await rewardful_import.start(db, m, user["_id"], body.send_claim_emails)
-    task = asyncio.create_task(rewardful_import.run_import(db, m, doc["_id"], api, body.send_claim_emails))
+    only = rewardful_import.clean_only(body.only)
+    doc = await rewardful_import.start(db, m, user["_id"], body.send_claim_emails, only)
+    task = asyncio.create_task(rewardful_import.run_import(db, m, doc["_id"], api, body.send_claim_emails, only))
     _imports.add(task)
     task.add_done_callback(_imports.discard)
     return {"import": rewardful_import.import_out(doc)}

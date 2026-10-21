@@ -39,7 +39,7 @@ signup handler, and verify it on the live site.`}</Snippet>
         <li><C>list_campaigns</C>, <C>create_campaign</C>, <C>update_campaign</C>, <C>update_program</C>: commission rate, duration, hold period, cookie length.</li>
         <li><C>add_affiliate</C>, <C>list_affiliates</C>, <C>list_referrals</C>, <C>list_commissions</C>: Growth plan or trial, like the API.</li>
         <li><C>list_portal_domains</C>, <C>add_portal_domain</C>, <C>check_portal_domain</C>: serve the join page from your own subdomain. The agent gives you the CNAME record (or adds it, if it can reach your DNS provider) and checks it until it&apos;s live.</li>
-        <li><C>start_rewardful_import</C>, <C>import_status</C>: the same <Link className="link" href="/docs/switching">Rewardful import</Link> as the dashboard. The Rewardful secret is used once and never stored.</li>
+        <li><C>start_rewardful_import</C>, <C>import_status</C>: the same <Link className="link" href="/docs/switching">Rewardful import</Link> as the dashboard, for the whole program or only the affiliates in <C>only</C>. The Rewardful secret is used once and never stored.</li>
       </List>
       <P>Payouts aren&apos;t exposed to agents. Paying affiliates stays in the dashboard.</P>
     </>
