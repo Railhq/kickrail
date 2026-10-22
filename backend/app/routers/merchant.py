@@ -1110,6 +1110,10 @@ async def overview(m=Depends(current_merchant), db=Depends(db_dep)):
         "pending_affiliates": await db.affiliates.count_documents({"merchant_id": mid, "status": "pending"}),
         "clicks": await db.clicks.count_documents({"merchant_id": mid, "test": False}),
         "leads": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}}),
+        # Signups that came from a tracked click: the only ones a click-to-signup rate can compare.
+        # Imported referrals, codes and server-side signups have no click.
+        "leads_from_clicks": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "click_id": {"$type": "string"}}),
+        "imported_leads": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "source": "rewardful"}),
         "customers": await db.referrals.count_documents({"merchant_id": mid, "status": "customer", "test": {"$ne": True}}),
         "flagged": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "flags.0": {"$exists": True}, "flags_cleared": {"$ne": True}}),
         "referred_revenue": revenue,

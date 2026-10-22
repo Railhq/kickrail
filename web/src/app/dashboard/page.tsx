@@ -6,7 +6,7 @@ import { displayMoney, type Fx, fxNote } from "@/lib/format";
 import type { Merchant } from "@/lib/types";
 
 type Overview = {
-  affiliates: number; pending_affiliates: number; clicks: number; leads: number; customers: number; flagged: number;
+  affiliates: number; pending_affiliates: number; clicks: number; leads: number; leads_from_clicks: number; imported_leads: number; customers: number; flagged: number;
   referred_revenue: Record<string, number>; commissions: Record<string, Record<string, number>>;
   stripe_connected: boolean; installed: boolean; fx: Fx;
 };
@@ -21,12 +21,15 @@ export default async function OverviewPage() {
     { done: o.installed, title: "Install tracking", body: <>Add the script to your site, then report signups from your server. <Link className="link" href="/dashboard/settings#install">Install guide →</Link></> },
     { done: o.affiliates > 0, title: "Invite affiliates", body: <>Share your program page: <code className="text-xs">/join/{m.slug}</code></> },
   ];
+  // The first rate compares clicks only with the signups they led to; imported signups,
+  // codes and server-side signups have no click. Rates over 100% mean the steps don't compare.
   const funnel = [
-    { label: "Clicks", value: o.clicks },
-    { label: "Signups", value: o.leads },
-    { label: "Paying customers", value: o.customers },
+    { label: "Clicks", value: o.clicks, rate: null },
+    { label: "Signups", value: o.leads, rate: o.leads_from_clicks },
+    { label: "Paying customers", value: o.customers, rate: o.customers },
   ];
-  const rate = (a: number, b: number) => (a ? `${((b / a) * 100).toFixed(b / a < 0.1 ? 1 : 0)}%` : "n/a");
+  const top = Math.max(...funnel.map((f) => f.value));
+  const rate = (a: number, b: number) => (a && b <= a ? `${((b / a) * 100).toFixed(b / a < 0.1 ? 1 : 0)}%` : "n/a");
   const [revenue, owed, paid] = [o.referred_revenue, o.commissions.pending, o.commissions.paid].map((m) => displayMoney(m, o.fx));
   const done = steps.filter((s) => s.done).length;
   return (
@@ -82,12 +85,12 @@ export default async function OverviewPage() {
         <h2 className="eyebrow mb-3">Funnel</h2>
         <div className="grid overflow-hidden rounded-2xl border border-line bg-surface sm:grid-cols-3">
           {funnel.map((f, i) => {
-            const pct = funnel[0].value ? Math.max(4, (f.value / funnel[0].value) * 100) : 0;
+            const pct = top ? Math.max(4, (f.value / top) * 100) : 0;
             return (
               <div key={f.label} className={`relative border-line py-5 pr-5 ${i > 0 ? "pl-5 sm:pl-9" : "pl-5"} max-sm:border-t max-sm:first:border-t-0 sm:border-l sm:first:border-l-0`}>
                 {i > 0 && (
                   <span className="num absolute -left-px top-5 hidden -translate-x-1/2 rounded-md border border-line bg-surface px-1.5 py-0.5 text-[11px] text-muted sm:block">
-                    {rate(funnel[i - 1].value, f.value)}
+                    {rate(funnel[i - 1].value, f.rate ?? f.value)}
                   </span>
                 )}
                 <p className="eyebrow">{f.label}</p>
@@ -99,6 +102,12 @@ export default async function OverviewPage() {
             );
           })}
         </div>
+        {o.leads > o.leads_from_clicks && (
+          <p className="mt-2 text-xs text-muted">
+            The click rate counts only the {o.leads_from_clicks.toLocaleString()} signup{o.leads_from_clicks === 1 ? "" : "s"} that came from a tracked click.
+            {o.imported_leads > 0 && <> {o.imported_leads.toLocaleString()} were imported from Rewardful, which doesn&apos;t export clicks.</>}
+          </p>
+        )}
       </section>
 
       <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-ink px-5 py-4 text-stone-200">
