@@ -207,12 +207,31 @@ export async function saveCampaign(_: State, f: FormData): Promise<State> {
     public: f.get("public") === "on",
     slug: str(f, "slug").toLowerCase() || null,
     landing_url: str(f, "landing_url") || null,
+    reward_type: str(f, "reward_type") || "cash",
+    affiliate_reward: str(f, "affiliate_reward"),
+    affiliate_reward_on: str(f, "affiliate_reward_on") || undefined,
+    affiliate_reward_limit: str(f, "affiliate_reward_limit") || undefined,
+    customer_reward: str(f, "customer_reward"),
+    customer_reward_on: str(f, "customer_reward_on") || undefined,
   };
   const r = await attempt(() => api<{ warning?: string }>(id ? `/merchant/campaigns/${id}` : "/merchant/campaigns", { method: id ? "PUT" : "POST", body }));
   revalidatePath("/dashboard/campaigns");
   revalidatePath("/dashboard/affiliates");
   if (r.error) return { error: r.error };
-  return r.value!.warning ? { error: `Saved, but: ${r.value!.warning}` } : { ok: "Saved. Applies to commissions earned from now on." };
+  return r.value!.warning ? { error: `Saved, but: ${r.value!.warning}` } : { ok: body.reward_type === "custom" ? "Saved. Applies to rewards earned from now on." : "Saved. Applies to commissions earned from now on." };
+}
+
+// ---------- rewards ----------
+
+export async function fulfillReward(id: string, _: State, f: FormData): Promise<State> {
+  const r = await attempt(() => api(`/merchant/rewards/${id}/fulfill`, { method: "POST", body: { note: str(f, "note") || null } }));
+  revalidatePath("/dashboard/rewards");
+  return r.error ? { error: r.error } : { ok: "Marked fulfilled." };
+}
+
+export async function unfulfillReward(id: string) {
+  await api(`/merchant/rewards/${id}/unfulfill`, { method: "POST" });
+  revalidatePath("/dashboard/rewards");
 }
 
 type ProductRuleRow = { match: "product" | "price"; id: string; label: string; type: "percent" | "flat" | "none"; percent: string; flat: string; currency: string };

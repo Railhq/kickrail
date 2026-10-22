@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { reviewReferral } from "@/app/actions";
 import { CommissionTable } from "@/components/CommissionTable";
 import { DeleteButton } from "@/components/DeleteButton";
+import { RewardTable } from "@/components/RewardTable";
 import { Badge, Card, Empty, Notice, Stat, StatGroup, StatusBadge } from "@/components/ui";
 import { api, authed } from "@/lib/backend";
 import { date, displayMoney, type Fx, fxNote, referralSource, referralWho } from "@/lib/format";
@@ -107,6 +108,13 @@ export default async function ReferralPage({ params }: { params: Promise<{ id: s
           </dl>
         </Card>
       </div>
+
+      {r.rewards.length > 0 && (
+        <section>
+          <h2 className="eyebrow mb-3">Rewards</h2>
+          <Card><RewardTable rows={r.rewards} withCustomer={false} /></Card>
+        </section>
+      )}
 
       <section>
         <h2 className="eyebrow mb-3">Commissions</h2>

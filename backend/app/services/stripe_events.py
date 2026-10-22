@@ -11,10 +11,10 @@ from datetime import UTC, datetime
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 
-from ..domain.commission import Line, decide_commission, decide_refund
+from ..domain.commission import Line, decide_commission, decide_refund, is_custom
 from ..db import run_in_transaction
 from ..ids import new_id
-from . import notify
+from . import notify, rewards
 from .referrals import AttachInput, attach_referral
 from .stripe_api import MerchantApi
 
@@ -179,6 +179,8 @@ async def earn(
         return "no commission: test referral"
     if referral.get("rejected"):
         return "no commission: referral rejected"
+    if is_custom(campaign):
+        return await rewards.on_payment(db, merchant, campaign, referral, source_key, base_cents)
     # Lead bounties are paid for the signup, so they don't use up a one-time sale commission.
     prior = await db.commissions.count_documents({"referral_id": referral["_id"], "status": {"$ne": "void"}, "amount_cents": {"$gt": 0}, "kind": {"$ne": "lead"}})
     d = decide_commission(campaign, base_cents, currency, paid_at, first_paid_at, prior, affiliate, lines)

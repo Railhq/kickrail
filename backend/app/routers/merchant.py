@@ -24,7 +24,7 @@ from ..security import MAX_PROGRAMS, can_be_paid, current_merchant, current_user
 from ..serializers import affiliate_url, code_obj, join_url, link_obj, portal_base
 from ..services import audit, fx, notify
 from ..services import payouts as payout_svc
-from ..services import deletion, rewardful_import, stripe_sync
+from ..services import deletion, rewardful_import, rewards, stripe_sync
 from ..services.exports import EXPORTS
 from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, sync_campaign_codes, sync_promotion_code
 from ..services.notify import EMAIL_KINDS
@@ -527,6 +527,13 @@ class CampaignIn(BaseModel):
     slug: str | None = Field(default=None, max_length=40)
     # Where this campaign's default affiliate links point, instead of the program website.
     landing_url: str | None = Field(default=None, max_length=1000)
+    # "custom": the reward isn't cash. The rule fields above are then ignored and no commissions are made.
+    reward_type: Literal["cash", "custom"] = "cash"
+    affiliate_reward: str = Field(default="", max_length=120)
+    affiliate_reward_on: Literal["signup", "first_payment", "every_payment"] = "first_payment"
+    affiliate_reward_limit: Literal["once", "per_referral"] = "per_referral"
+    customer_reward: str = Field(default="", max_length=120)
+    customer_reward_on: Literal["signup", "first_payment"] = "signup"
 
 
 class RuleIn(BaseModel):
@@ -583,7 +590,17 @@ def _campaign_fields(b: CampaignIn, m: dict) -> dict:
         landing = check_landing(m, b.landing_url)
     except AffiliateError as e:
         raise HTTPException(e.status, str(e))
+    reward = None
+    if b.reward_type == "custom":
+        if not b.affiliate_reward.strip():
+            raise HTTPException(422, "describe what the affiliate gets")
+        reward = {
+            "type": "custom",
+            "affiliate": {"description": b.affiliate_reward.strip(), "on": b.affiliate_reward_on, "limit": b.affiliate_reward_limit},
+            "customer": {"description": b.customer_reward.strip(), "on": b.customer_reward_on} if b.customer_reward.strip() else None,
+        }
     return {
+        "reward": reward,
         "public": b.public,
         "slug": slug or None,
         "landing_url": landing,
@@ -593,7 +610,7 @@ def _campaign_fields(b: CampaignIn, m: dict) -> dict:
         "hold_days": b.hold_days,
         "min_payout_cents": b.min_payout_cents,
         "stripe_coupon_id": b.stripe_coupon_id or None,
-        "lead_bounty": {"cents": b.lead_bounty_cents, "currency": b.lead_bounty_currency.lower()} if b.lead_bounty_cents else None,
+        "lead_bounty": {"cents": b.lead_bounty_cents, "currency": b.lead_bounty_currency.lower()} if b.lead_bounty_cents and not reward else None,
         "product_rules": [{"match": pr.match, "id": pr.id, "label": pr.label.strip(), "rule": rule_doc(pr.rule)} for pr in b.product_rules],
     }
 
@@ -608,6 +625,7 @@ def campaign_out(c: dict, m: dict) -> dict:
         "join_url": join_url(m, c) if c.get("public") and c.get("slug") else (join_url(m) if c.get("is_default") else None),
         "description": describe_rule(c),
         "lead_bounty": c.get("lead_bounty"),
+        "reward": c.get("reward"),
         "product_rules": [{**r, "description": describe_rate(r["rule"])} for r in c.get("product_rules") or []],
     }
 
@@ -910,6 +928,7 @@ async def get_referral(referral_id: str, m=Depends(current_merchant), db=Depends
         "campaign": out(campaign) if campaign else None,
         "click": out(click) if click else None,
         "commissions": [{**out(c), "affiliate_name": name} for c in commissions],
+        "rewards": [out(w) async for w in db.rewards.find({"merchant_id": m["_id"], "referral_id": referral_id}).sort("created_at", -1)],
     }
 
 
@@ -920,7 +939,8 @@ async def clear_flags(referral_id: str, m=Depends(current_merchant), db=Depends(
         if not res.matched_count:
             return False
         released = await tdb.commissions.update_many({"referral_id": referral_id, "held": True}, {"$set": {"held": False}})
-        await audit.record(tdb, m["_id"], "referral.flags_cleared", referral_id, commissions_released=released.modified_count)
+        rewards_released = await rewards.release(tdb, m["_id"], await tdb.referrals.find_one({"_id": referral_id}))
+        await audit.record(tdb, m["_id"], "referral.flags_cleared", referral_id, commissions_released=released.modified_count, rewards_released=rewards_released)
         async for c in tdb.commissions.find({"referral_id": referral_id}, {"_id": 1}):
             await notify.commission_updated(tdb, m["_id"], c["_id"])
         return True
@@ -939,7 +959,8 @@ async def reject_referral(referral_id: str, m=Depends(current_merchant), db=Depe
         voidable = {"referral_id": referral_id, "status": "pending", "payout_id": {"$exists": False}}
         ids = [c["_id"] async for c in tdb.commissions.find(voidable, {"_id": 1})]
         await tdb.commissions.update_many({"_id": {"$in": ids}}, {"$set": {"status": "void", "void_reason": "referral rejected", "amount_cents": 0}})
-        await audit.record(tdb, m["_id"], "referral.rejected", referral_id, commissions_voided=ids)
+        voided_rewards = await rewards.void_unfulfilled(tdb, referral_id, "referral rejected")
+        await audit.record(tdb, m["_id"], "referral.rejected", referral_id, commissions_voided=ids, rewards_voided=voided_rewards)
         for cid in ids:
             await notify.commission_updated(tdb, m["_id"], cid)
         return True
@@ -984,6 +1005,64 @@ async def _affiliate_names(db, merchant_id: str) -> dict[str, str]:
     affs = await db.affiliates.find({"merchant_id": merchant_id}, {"user_id": 1}).to_list(None)
     users = {u["_id"]: u["name"] async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}}, {"name": 1})}
     return {a["_id"]: users.get(a["user_id"], "") for a in affs}
+
+
+# ---------- rewards (campaigns whose reward isn't cash) ----------
+
+
+@router.get("/rewards")
+async def list_rewards(
+    status: Literal["earned", "fulfilled", "void"] | None = None,
+    recipient: Literal["affiliate", "customer"] | None = None,
+    affiliate_id: str | None = Query(None, max_length=64),
+    q: str = Query("", max_length=200),
+    page: int = Query(1, ge=1, le=10_000),
+    m=Depends(current_merchant),
+    db=Depends(db_dep),
+):
+    query: dict = {"merchant_id": m["_id"]}
+    if status:
+        query["status"] = status
+    if recipient:
+        query["recipient"] = recipient
+    if affiliate_id:
+        query["affiliate_id"] = affiliate_id
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        refs = [r["_id"] async for r in db.referrals.find({"merchant_id": m["_id"], "$or": [{"email": rx}, {"external_user_id": rx}, {"stripe_customer_id": rx}]}, {"_id": 1})]
+        query["$or"] = [{"description": rx}, {"referral_id": {"$in": refs}}, {"affiliate_id": {"$in": await _matching_affiliates(db, m["_id"], rx)}}]
+    rows, total = await _page(db.rewards, query, page)
+    names = await _affiliate_names(db, m["_id"])
+    emails = {r["_id"]: r.get("email") async for r in db.referrals.find({"_id": {"$in": [w["referral_id"] for w in rows]}}, {"email": 1})}
+    counts = {row["_id"]: row["n"] async for row in await db.rewards.aggregate([{"$match": {"merchant_id": m["_id"]}}, {"$group": {"_id": "$status", "n": {"$sum": 1}}}])}
+    return {
+        "items": [{**out(w), "affiliate_name": names.get(w["affiliate_id"], ""), "customer_email": emails.get(w["referral_id"])} for w in rows],
+        "total": total, "page": page, "page_size": PAGE_SIZE, "counts": counts,
+    }
+
+
+class FulfillIn(BaseModel):
+    note: str | None = Field(default=None, max_length=300)
+
+
+@router.post("/rewards/{reward_id}/fulfill")
+async def fulfill_reward(reward_id: str, body: FulfillIn | None = None, m=Depends(current_merchant), user=Depends(current_user), db=Depends(db_dep)):
+    try:
+        r = await rewards.fulfill(db, m["_id"], reward_id, body.note if body else None, by=user["_id"])
+    except rewards.RewardError as e:
+        raise HTTPException(e.status, str(e))
+    await audit.record(db, m["_id"], "reward.fulfilled", reward_id, note=r.get("note"))
+    return out(r)
+
+
+@router.post("/rewards/{reward_id}/unfulfill")
+async def unfulfill_reward(reward_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
+    try:
+        r = await rewards.unfulfill(db, m["_id"], reward_id)
+    except rewards.RewardError as e:
+        raise HTTPException(e.status, str(e))
+    await audit.record(db, m["_id"], "reward.unfulfilled", reward_id)
+    return out(r)
 
 
 @router.get("/commissions")

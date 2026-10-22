@@ -67,8 +67,16 @@ async def delete_referral(db: AsyncDatabase, merchant_id: str, referral_id: str,
         commissions = await tdb.commissions.find({"referral_id": referral_id}).to_list(None)
         if any(_locked(c) for c in commissions):
             raise Blocked("This referral has paid commissions, or commissions in a payout. Undo or cancel those payouts first, or reject the referral instead.")
+        rewards = await tdb.rewards.find({"referral_id": referral_id}).to_list(None)
+        if any(w["status"] == "fulfilled" for w in rewards):
+            raise Blocked("This referral has rewards you already handed out, so it's kept as their record. Reject it instead to stop it earning.")
         now = datetime.now(UTC)
-        await tdb.deleted_records.insert_many([_tombstone(merchant_id, "commission", c, now, reason) for c in commissions] + [_tombstone(merchant_id, "referral", r, now, reason)])
+        await tdb.deleted_records.insert_many(
+            [_tombstone(merchant_id, "commission", c, now, reason) for c in commissions]
+            + [_tombstone(merchant_id, "reward", w, now, reason) for w in rewards]
+            + [_tombstone(merchant_id, "referral", r, now, reason)]
+        )
+        await tdb.rewards.delete_many({"referral_id": referral_id})
         await tdb.commissions.delete_many({"_id": {"$in": [c["_id"] for c in commissions]}})
         await tdb.referrals.delete_one({"_id": r["_id"]})
         await audit.record(

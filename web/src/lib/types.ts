@@ -76,6 +76,32 @@ export type Rule = { type: "percent"; bps: number } | { type: "flat"; cents: num
 
 export type ProductRule = { match: "product" | "price"; id: string; label: string; rule: Rule; description: string };
 
+export type RewardTrigger = "signup" | "first_payment" | "every_payment";
+
+export type CustomReward = {
+  type: "custom";
+  affiliate: { description: string; on: RewardTrigger; limit: "once" | "per_referral" };
+  customer: { description: string; on: "signup" | "first_payment" } | null;
+};
+
+export type Reward = {
+  id: string;
+  recipient: "affiliate" | "customer";
+  description: string;
+  trigger: RewardTrigger;
+  status: "earned" | "fulfilled" | "void";
+  held?: boolean;
+  affiliate_id: string;
+  referral_id: string;
+  campaign_id: string;
+  note?: string | null;
+  void_reason?: string;
+  fulfilled_at?: string | null;
+  created_at: string;
+  affiliate_name?: string;
+  customer_email?: string | null;
+};
+
 export type Campaign = {
   id: string;
   name: string;
@@ -87,6 +113,7 @@ export type Campaign = {
   is_default: boolean;
   description: string;
   lead_bounty: { cents: number; currency: string } | null;
+  reward: CustomReward | null;
   product_rules: ProductRule[];
   public: boolean;
   slug: string | null;
@@ -145,6 +172,7 @@ export type Referral = {
 export type Page<T> = { items: T[]; total: number; page: number; page_size: number };
 
 export type ReferralDetail = Referral & {
+  rewards: Reward[];
   affiliate: { id: string; name: string; email: string; token: string };
   campaign: { id: string; name: string } | null;
   click: { token: string; landing_url: string; referrer: string; created_at: string } | null;
@@ -238,6 +266,8 @@ export type PortalView = {
   customers: number;
   totals: Record<string, { in_hold: number; payable: number; paid: number }>;
   commissions: { id: string; kind: "lead" | "sale"; amount_cents: number; currency: string; status: string; held_for_review: boolean; clawback: boolean; due_at: string; paid_at?: string; created_at: string; void_reason?: string }[];
+  reward_mode: "cash" | "custom";
+  rewards: { id: string; description: string; status: "earned" | "fulfilled"; held_for_review: boolean; created_at: string; fulfilled_at?: string | null }[];
 };
 
 export type Import = {

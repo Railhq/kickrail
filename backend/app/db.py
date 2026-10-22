@@ -119,6 +119,12 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
             # payout.due sweep, across programs.
             ([("status", A), ("due_at", A)], {"partialFilterExpression": {"status": "pending"}}),
         ],
+        "rewards": [
+            ([("merchant_id", A), ("source_key", A)], {"unique": True}),
+            ([("merchant_id", A), ("status", A), ("created_at", D)], {}),
+            ([("referral_id", A)], {}),
+            ([("affiliate_id", A), ("created_at", D)], {}),
+        ],
         "payouts": [([("merchant_id", A), ("created_at", D)], {}), ([("funding_session_id", A)], {"sparse": True}), ([("method", A), ("status", A)], {})],
         "affiliate_links": [([("merchant_id", A), ("token", A)], {"unique": True}), ([("affiliate_id", A)], {})],
         "affiliate_codes": [

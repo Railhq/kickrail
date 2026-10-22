@@ -49,7 +49,7 @@ export function Badge({ tone = "gray", children }: { tone?: keyof typeof TONES; 
 }
 
 export function StatusBadge({ status }: { status: string }) {
-  const tone = ({ approved: "green", paid: "green", customer: "green", pending: "amber", awaiting_funding: "amber", processing: "blue", lead: "blue", partial: "amber", rejected: "red", void: "gray", failed: "red", cancelled: "gray", undone: "gray" } as const)[status] ?? "gray";
+  const tone = ({ approved: "green", paid: "green", customer: "green", pending: "amber", awaiting_funding: "amber", earned: "amber", fulfilled: "green", processing: "blue", lead: "blue", partial: "amber", rejected: "red", void: "gray", failed: "red", cancelled: "gray", undone: "gray" } as const)[status] ?? "gray";
   return <Badge tone={tone}>{status.replace("_", " ")}</Badge>;
 }
 

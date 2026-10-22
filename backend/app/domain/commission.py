@@ -6,6 +6,7 @@ A campaign document carries:
   hold_days: days a commission waits before it becomes payable (refund window)
   product_rules: [{"match": "product" | "price", "id": "prod_...", "rule": <rule> | {"type": "none"}}]
   lead_bounty: {"cents": 500, "currency": "usd"} | None, paid once per referred signup
+  reward: {"type": "custom", ...} | None, rewards that aren't cash instead (services/rewards.py)
 
 An affiliate can carry rate_override (a rule) that replaces the campaign's default
 rule for them. Product rules still win for the products they name, because they
@@ -156,7 +157,27 @@ def describe_rate(rule: dict) -> str:
     return "no commission"
 
 
+REWARD_TRIGGERS = {"signup": "when a referral signs up", "first_payment": "when a referral first pays", "every_payment": "for every payment from a referral"}
+
+
+def is_custom(campaign: dict | None) -> bool:
+    return ((campaign or {}).get("reward") or {}).get("type") == "custom"
+
+
+def describe_reward(campaign: dict) -> str:
+    r = campaign["reward"]
+    a = r["affiliate"]
+    text = f"{a['description']} {REWARD_TRIGGERS[a['on']]}"
+    if a["limit"] == "once":
+        text += ", once"
+    if c := r.get("customer"):
+        text += f"; the referred customer gets {c['description']} {'at signup' if c['on'] == 'signup' else 'when they first pay'}"
+    return text
+
+
 def describe_rule(campaign: dict, affiliate: dict | None = None) -> str:
+    if is_custom(campaign):
+        return describe_reward(campaign)
     rule, duration = effective_rule(campaign, affiliate), campaign["duration"]
     rate = describe_rate(rule)
     if duration["mode"] == "once":

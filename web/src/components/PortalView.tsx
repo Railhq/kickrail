@@ -11,6 +11,9 @@ import type { PortalView as View } from "@/lib/types";
  * component with preview set, which swaps the affiliate's own controls for read-only text.
  */
 export function PortalView({ d, preview = false, back }: { d: View; preview?: boolean; back?: React.ReactNode }) {
+  const custom = d.reward_mode === "custom";
+  // An affiliate moved from a cash campaign keeps seeing the money they're owed.
+  const cash = !custom || Object.keys(d.totals).length > 0;
   const pick = (k: "in_hold" | "payable" | "paid") => Object.fromEntries(Object.entries(d.totals).map(([c, v]) => [c, v[k]]));
   const bal = { in_hold: displayMoney(pick("in_hold"), d.fx), payable: displayMoney(pick("payable"), d.fx), paid: displayMoney(pick("paid"), d.fx) };
   const nextRelease = d.commissions.filter((c) => c.status === "pending" && !c.held_for_review && new Date(c.due_at) > new Date()).map((c) => c.due_at).sort()[0];
@@ -118,6 +121,22 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
         )}
       </Card>
 
+      {custom && (
+        <section className="grid gap-px overflow-hidden rounded-2xl border border-ink bg-ink-line sm:grid-cols-2">
+          <div className="bg-ink px-5 py-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted">Rewards earned</p>
+            <p className="mt-2 font-display text-[2.6rem] leading-none text-signal" style={accent ? { color: accent } : undefined}>{d.rewards.length}</p>
+            <p className="mt-2 text-xs text-ink-muted">{d.program.terms}</p>
+          </div>
+          <div className="bg-ink px-5 py-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted">Handed out</p>
+            <p className="mt-2 font-display text-[2.6rem] leading-none text-white">{d.rewards.filter((w) => w.status === "fulfilled").length}</p>
+            <p className="mt-2 text-xs text-ink-muted">all time</p>
+          </div>
+        </section>
+      )}
+      {cash && (
+        <>
       <section className="grid gap-px overflow-hidden rounded-2xl border border-ink bg-ink-line sm:grid-cols-3">
         <div className="bg-ink px-5 py-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-muted">In hold</p>
@@ -145,6 +164,9 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
         </p>
       )}
 
+        </>
+      )}
+
       <StatGroup>
         <Stat label="Clicks" value={d.clicks} hint={`${d.clicks_30d} in the last 30 days`} />
         <Stat label="Signups" value={d.leads} />
@@ -152,7 +174,27 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
         <Stat label="Conversion" value={d.clicks ? `${((d.customers / d.clicks) * 100).toFixed(1)}%` : "–"} hint="customers per click" />
       </StatGroup>
 
-      <Card title="Commissions">
+      {custom && (
+        <Card title="Rewards">
+          {d.rewards.length === 0 ? (
+            <Empty>No rewards yet.{d.program.terms && <> You get {d.program.terms}.</>}</Empty>
+          ) : (
+            <Table head={["Earned", "Reward", "Status"]}>
+              {d.rewards.map((w) => (
+                <tr key={w.id}>
+                  <td className="px-5 py-3 text-muted">{date(w.created_at)}</td>
+                  <td className="px-5 py-3 font-medium">{w.description}</td>
+                  <td className="px-5 py-3">
+                    {w.status === "fulfilled" ? <Badge tone="green">given {w.fulfilled_at ? date(w.fulfilled_at) : ""}</Badge> : w.held_for_review ? <Badge tone="amber">under review</Badge> : <Badge tone="amber">on its way</Badge>}
+                  </td>
+                </tr>
+              ))}
+            </Table>
+          )}
+        </Card>
+      )}
+
+      {(!custom || d.commissions.length > 0) && <Card title="Commissions">
         {d.commissions.length === 0 ? (
           <Empty>No commissions yet. You earn when someone you referred pays.</Empty>
         ) : (
@@ -175,7 +217,7 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
             ))}
           </Table>
         )}
-      </Card>
+      </Card>}
       {d.program.powered_by && (
         <p className="text-center text-xs text-muted">
           Powered by <a className="underline" href="https://kickrail.com/?utm_source=powered_by&utm_medium=portal" target="_blank" rel="noopener">Kickrail</a>
