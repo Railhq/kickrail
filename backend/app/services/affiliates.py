@@ -55,6 +55,8 @@ async def create_affiliate(
     campaign = await db.campaigns.find_one({"_id": campaign_id, "merchant_id": m["_id"]} if campaign_id else {"merchant_id": m["_id"], "is_default": True})
     if not campaign:
         raise AffiliateError("campaign not found", 404)
+    if campaign.get("archived_at"):
+        raise AffiliateError("that campaign is archived and closed to new affiliates", 409)
     if token and (not TOKEN.match(token) or await token_taken(db, m["_id"], token)):
         raise AffiliateError("that link name is taken or invalid", 409)
     if code and (not CODE.match(code.upper()) or await code_taken(db, m["_id"], code.upper())):

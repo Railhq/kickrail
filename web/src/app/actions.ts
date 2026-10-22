@@ -249,6 +249,16 @@ function productRules(json: string) {
     }));
 }
 
+export async function setCampaignArchived(id: string, archived: boolean) {
+  await api(`/merchant/campaigns/${id}/${archived ? "archive" : "unarchive"}`, { method: "POST" });
+  revalidatePath("/dashboard", "layout");
+}
+
+export async function deleteCampaign(id: string) {
+  await api(`/merchant/campaigns/${id}`, { method: "DELETE" });
+  revalidatePath("/dashboard", "layout");
+}
+
 export async function makeDefaultCampaign(id: string) {
   await api(`/merchant/campaigns/${id}/default`, { method: "POST" });
   revalidatePath("/dashboard/campaigns");

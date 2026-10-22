@@ -44,7 +44,7 @@ export default async function AffiliatesPage({ searchParams }: { searchParams: P
                 <Field label="Email"><input className="input" name="email" type="email" required /></Field>
                 <Field label="Campaign">
                   <select name="campaign_id" className="input" defaultValue={campaigns.find((c) => c.is_default)?.id}>
-                    {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {campaigns.filter((c) => !c.archived).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </Field>
                 <label className="flex items-start gap-2 text-sm">
@@ -137,7 +137,7 @@ export default async function AffiliatesPage({ searchParams }: { searchParams: P
                       <ActionForm action={updateAffiliate} className="absolute right-0 z-20 mt-2 w-56 space-y-2 rounded-xl border border-line bg-surface p-3 text-left shadow-lg">
                         <input type="hidden" name="id" value={a.id} />
                         <select name="campaign_id" defaultValue={a.campaign_id} className="input">
-                          {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          {campaigns.filter((c) => !c.archived).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </select>
                         <input name="code" defaultValue={a.code} placeholder="Creator code" className="input font-mono uppercase" pattern="[A-Za-z0-9]{3,20}" />
                         <Submit variant="secondary" className="w-full">Save</Submit>

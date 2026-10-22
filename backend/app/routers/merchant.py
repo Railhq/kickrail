@@ -654,17 +654,28 @@ def campaign_out(c: dict, m: dict) -> dict:
         "lead_bounty": c.get("lead_bounty"),
         "reward": c.get("reward"),
         "product_rules": [{**r, "description": describe_rate(r["rule"])} for r in c.get("product_rules") or []],
+        "archived": bool(c.get("archived_at")),
     }
 
 
 @router.get("/campaigns")
 async def list_campaigns(m=Depends(current_merchant), db=Depends(db_dep)):
-    return [campaign_out(c, m) async for c in db.campaigns.find({"merchant_id": m["_id"]}).sort("created_at", 1)]
+    usage = await deletion.campaign_usage(db, m["_id"])
+    out = []
+    async for c in db.campaigns.find({"merchant_id": m["_id"]}).sort("created_at", 1):
+        u = usage.get(c["_id"], {})
+        out.append({**campaign_out(c, m), "usage": {k: u.get(k, 0) for k, _ in deletion.USAGE}, "delete_blocked": deletion.campaign_delete_blocked(c, u)})
+    return out
+
+
+def _live_campaigns(m: dict) -> dict:
+    """Archived campaigns don't count toward the plan's campaign limit."""
+    return {"merchant_id": m["_id"], "archived_at": {"$exists": False}}
 
 
 @router.post("/campaigns")
 async def create_campaign(body: CampaignIn, m=Depends(current_merchant), db=Depends(db_dep)):
-    plans.require_room(m, "campaigns", await db.campaigns.count_documents({"merchant_id": m["_id"]}))
+    plans.require_room(m, "campaigns", await db.campaigns.count_documents(_live_campaigns(m)))
     if body.stripe_coupon_id:
         plans.require(m, "creator_codes")
     c = {"_id": new_id("cmp"), "merchant_id": m["_id"], **_campaign_fields(body, m), "is_default": False, "created_at": datetime.now(UTC)}
@@ -695,10 +706,50 @@ async def update_campaign(campaign_id: str, body: CampaignIn, m=Depends(current_
 
 @router.post("/campaigns/{campaign_id}/default")
 async def make_default(campaign_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
-    if not await db.campaigns.find_one({"_id": campaign_id, "merchant_id": m["_id"]}):
+    c = await db.campaigns.find_one({"_id": campaign_id, "merchant_id": m["_id"]})
+    if not c:
         raise HTTPException(404, "campaign not found")
+    if c.get("archived_at"):
+        raise HTTPException(409, "unarchive this campaign before making it the default")
     await db.campaigns.update_many({"merchant_id": m["_id"]}, {"$set": {"is_default": False}})
     await db.campaigns.update_one({"_id": campaign_id}, {"$set": {"is_default": True}})
+    return {"ok": True}
+
+
+@router.post("/campaigns/{campaign_id}/archive")
+async def archive_campaign(campaign_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
+    """Closed to new affiliates; the ones already in it keep earning on its terms."""
+    c = await db.campaigns.find_one({"_id": campaign_id, "merchant_id": m["_id"]})
+    if not c:
+        raise HTTPException(404, "campaign not found")
+    if c.get("is_default"):
+        raise HTTPException(409, "the default campaign can't be archived; make another campaign the default first")
+    if not c.get("archived_at"):
+        await db.campaigns.update_one({"_id": campaign_id}, {"$set": {"archived_at": datetime.now(UTC)}})
+        await audit.record(db, m["_id"], "campaign.archived", campaign_id, name=c["name"])
+    return {"ok": True}
+
+
+@router.post("/campaigns/{campaign_id}/unarchive")
+async def unarchive_campaign(campaign_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
+    c = await db.campaigns.find_one({"_id": campaign_id, "merchant_id": m["_id"]})
+    if not c:
+        raise HTTPException(404, "campaign not found")
+    if c.get("archived_at"):
+        plans.require_room(m, "campaigns", await db.campaigns.count_documents(_live_campaigns(m)))
+        await db.campaigns.update_one({"_id": campaign_id}, {"$unset": {"archived_at": ""}})
+        await audit.record(db, m["_id"], "campaign.unarchived", campaign_id, name=c["name"])
+    return {"ok": True}
+
+
+@router.delete("/campaigns/{campaign_id}")
+async def delete_campaign(campaign_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
+    try:
+        await deletion.delete_campaign(db, m["_id"], campaign_id)
+    except deletion.NotFound:
+        raise HTTPException(404, "campaign not found")
+    except deletion.Blocked as e:
+        raise HTTPException(409, str(e))
     return {"ok": True}
 
 
@@ -827,8 +878,11 @@ async def patch_affiliate(db, m: dict, aff: dict, body: AffiliatePatch, factory)
     if body.status:
         s["status"] = body.status
     if body.campaign_id:
-        if not await db.campaigns.find_one({"_id": body.campaign_id, "merchant_id": m["_id"]}):
+        target = await db.campaigns.find_one({"_id": body.campaign_id, "merchant_id": m["_id"]}, {"archived_at": 1})
+        if not target:
             raise HTTPException(404, "campaign not found")
+        if target.get("archived_at") and body.campaign_id != aff.get("campaign_id"):
+            raise HTTPException(409, "that campaign is archived; unarchive it to move affiliates into it")
         s["campaign_id"] = body.campaign_id
     if body.code and body.code.upper() != aff.get("code"):
         if await db.affiliate_codes.find_one({"merchant_id": m["_id"], "code": body.code.upper()}):

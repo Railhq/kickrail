@@ -30,7 +30,7 @@ async def overview(m=Depends(current_merchant), user=Depends(current_user), db=D
         "plans": catalog(),
         "usage": await billing.usage(db, m),
         "teammates": len(m.get("member_ids") or []),
-        "campaigns": await db.campaigns.count_documents({"merchant_id": m["_id"]}),
+        "campaigns": await db.campaigns.count_documents({"merchant_id": m["_id"], "archived_at": {"$exists": False}}),
         "domains": len(m.get("portal_domains") or []),
         "enabled": bool(get_settings().billing_key),
         "can_manage": user["_id"] == m.get("owner_id"),

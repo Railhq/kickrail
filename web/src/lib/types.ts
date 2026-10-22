@@ -120,6 +120,9 @@ export type Campaign = {
   slug: string | null;
   landing_url: string | null;
   join_url: string | null;
+  archived: boolean;
+  usage?: { affiliates: number; referrals: number; commissions: number; rewards: number };
+  delete_blocked?: string | null;
 };
 
 export type AffiliateLink = { id: string; token: string; url: string; landing_url: string | null; label: string; created_at: string };
