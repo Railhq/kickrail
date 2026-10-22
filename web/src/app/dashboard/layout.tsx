@@ -33,7 +33,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </div>
       </aside>
       <main className="min-w-0 flex-1">
-        <div className="mx-auto max-w-5xl p-4 sm:p-6 md:px-10 md:py-10">
+        <div className="mx-auto max-w-7xl p-4 sm:p-6 md:px-10 md:py-10">
           <PlanBanner plan={plan} />
           {children}
         </div>
