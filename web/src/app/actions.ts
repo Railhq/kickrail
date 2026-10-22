@@ -399,6 +399,15 @@ export async function createPayout(_: State, f: FormData): Promise<State> {
   return { ok: method === "paypal" ? `Sent a PayPal batch to ${who}. It shows as paid once PayPal confirms each item.` : `Marked ${who} as paid.` };
 }
 
+export async function payCommissions(_: State, f: FormData): Promise<State> {
+  const ids = f.getAll("commission_ids").map(String);
+  if (!ids.length) return { error: "Tick the commissions you've paid." };
+  const r = await attempt(() => api<{ total_cents: number; currency: string }[]>("/merchant/payouts/commissions", { body: { commission_ids: ids, reference: str(f, "reference") } }));
+  revalidatePath("/dashboard", "layout");
+  if (r.error) return { error: r.error };
+  return { ok: `Marked ${ids.length} commission${ids.length === 1 ? "" : "s"} paid. It's in Payouts history, where you can undo it.` };
+}
+
 export async function syncPayout(id: string) {
   await api(`/merchant/payouts/${id}/sync`, { method: "POST" }).catch(() => undefined);
   revalidatePath("/dashboard/payouts");

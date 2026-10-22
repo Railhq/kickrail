@@ -6,12 +6,14 @@ import { PortalView } from "@/components/PortalView";
 import { Badge, Card, Field } from "@/components/ui";
 import { api, authed } from "@/lib/backend";
 import type { Affiliate, Campaign, PortalView as View } from "@/lib/types";
+import { AffiliateCommissions } from "./AffiliateCommissions";
 import { RateFields } from "./RateFields";
 
 export const metadata = { title: "Affiliate" };
 
-export default async function AffiliateDetail({ params }: { params: Promise<{ id: string }> }) {
+export default async function AffiliateDetail({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; page?: string }> }) {
   const { id } = await params;
+  const sp = await searchParams;
   const [view, affs, campaigns] = await Promise.all([
     authed<View & { affiliate: { name: string; email: string } }>(`/merchant/affiliates/${id}/view`, `/dashboard/affiliates/${id}`),
     api<Affiliate[]>("/merchant/affiliates"),
@@ -98,6 +100,8 @@ export default async function AffiliateDetail({ params }: { params: Promise<{ id
           </div>
         </Card>
       </div>
+
+      <AffiliateCommissions affiliateId={id} tab={sp.tab} page={Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1)} />
 
       <section>
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-ink bg-ink px-4 py-3 text-sm text-stone-200">

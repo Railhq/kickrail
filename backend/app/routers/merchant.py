@@ -989,6 +989,9 @@ async def _affiliate_names(db, merchant_id: str) -> dict[str, str]:
 @router.get("/commissions")
 async def list_commissions(
     status: Literal["pending", "paid", "void"] | None = None,
+    affiliate_id: str | None = Query(None, max_length=64),
+    # Unpaid commissions only: True = payable now (hold over, not held for review), False = not yet.
+    due: bool | None = None,
     q: str = Query("", max_length=200),
     page: int = Query(1, ge=1, le=10_000),
     m=Depends(current_merchant),
@@ -997,6 +1000,12 @@ async def list_commissions(
     query: dict = {"merchant_id": m["_id"]}
     if status:
         query["status"] = status
+    if affiliate_id:
+        query["affiliate_id"] = affiliate_id
+    if due is not None:
+        now = datetime.now(UTC)
+        query["status"] = "pending"
+        query["$and"] = [{"due_at": {"$lte": now}, "held": {"$ne": True}} if due else {"$or": [{"due_at": {"$gt": now}}, {"held": True}]}]
     if q.strip():
         rx = {"$regex": re.escape(q.strip()), "$options": "i"}
         refs = [x["_id"] async for x in db.referrals.find({"merchant_id": m["_id"], "$or": [{"email": rx}, {"stripe_customer_id": rx}, {"external_user_id": rx}]}, {"_id": 1}).limit(1000)]
@@ -1085,6 +1094,21 @@ async def create_payout(body: PayoutIn, m=Depends(current_merchant), db=Depends(
         log.warning("payout failed for %s: %s", m["_id"], e)
         raise HTTPException(502, f"{body.method} rejected the payout: {e}")
     return out(payout)
+
+
+class PayCommissionsIn(BaseModel):
+    commission_ids: list[str] = Field(min_length=1, max_length=1000)
+    reference: str = Field(default="", max_length=200)
+
+
+@router.post("/payouts/commissions")
+async def pay_chosen_commissions(body: PayCommissionsIn, m=Depends(current_merchant), db=Depends(db_dep)):
+    """Mark chosen commissions paid, due or not: you paid the affiliate yourself."""
+    try:
+        payouts = await payout_svc.pay_commissions(db, m, body.commission_ids, body.reference)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return [out(p) for p in payouts]
 
 
 @router.post("/payouts/{payout_id}/sync")
