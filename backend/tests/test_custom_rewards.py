@@ -96,6 +96,9 @@ async def test_custom_rewards(client, db):
     assert view["reward_mode"] == "custom" and [w["description"] for w in view["rewards"]] == ["50% off forever"]
     assert view["totals"] == {} and view["program"]["terms"].startswith("50% off forever")
 
+    # Never paid cash, so never asked for a tax form.
+    assert aff not in [r["affiliate_id"] for r in (await client.get("/merchant/tax", headers=auth(owner))).json()["affiliates"]]
+
     # A referral that already had a reward handed out can't be deleted.
     assert (await client.delete(f"/merchant/referrals/{ref1}", headers=auth(owner))).status_code == 409
 

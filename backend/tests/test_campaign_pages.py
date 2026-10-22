@@ -38,8 +38,13 @@ async def test_public_campaign_has_a_join_page(client, db, prog):
     assert a["campaign_id"] == c["id"]
     view = (await client.get(f"/portal/{a['id']}", headers=auth(aff_token))).json()
     assert view["link"].startswith("https://pageco.example/partners?via=")
-    listed = next(x for x in (await client.get("/merchant/affiliates", headers=h)).json() if x["id"] == a["id"])
-    assert listed["link"] == view["link"]
+    page = (await client.get("/merchant/affiliates", params={"campaign_id": c["id"]}, headers=h)).json()
+    [listed] = page["items"]
+    assert listed["id"] == a["id"] and listed["link"] == view["link"] and listed["campaign_name"] == c["name"]
+    assert page["total"] == 1 and page["by_campaign"][c["id"]] == 1
+    assert (await client.get(f"/merchant/affiliates/{a['id']}", headers=h)).json()["link"] == view["link"]
+    assert (await client.get("/merchant/affiliates", params={"q": "ann@pages"}, headers=h)).json()["total"] == 1
+    assert (await client.get("/merchant/affiliates/aff_nope", headers=h)).status_code == 404
 
 
 async def test_private_campaigns_and_bad_input(client, db, prog):

@@ -51,7 +51,7 @@ async def payable(db: AsyncDatabase, merchant_id: str, now: datetime | None = No
     merchant = await db.merchants.find_one({"_id": merchant_id}, {"settings": 1}) or {}
     require_tax = (merchant.get("settings") or {}).get("require_tax_form", False)
     commissions = await db.commissions.find({"merchant_id": merchant_id, "status": "pending", "payout_id": {"$exists": False}}).to_list(None)
-    affiliates = {a["_id"]: a async for a in db.affiliates.find({"merchant_id": merchant_id})}
+    affiliates = {a["_id"]: a async for a in db.affiliates.find({"merchant_id": merchant_id, "_id": {"$in": list({c["affiliate_id"] for c in commissions})}})}
     campaigns = {c["_id"]: c async for c in db.campaigns.find({"merchant_id": merchant_id})}
     users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affiliates.values()]}})}
 

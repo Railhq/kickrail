@@ -1,18 +1,33 @@
 import Link from "next/link";
 import { addAffiliate, setAffiliateStatus, updateAffiliate } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
+import { listHref, Pager, SearchBox } from "@/components/ListControls";
 import { Badge, Card, Empty, Field, StatusBadge, Table } from "@/components/ui";
 import { api } from "@/lib/backend";
 import { date, displayMoney, type Fx, fxNote } from "@/lib/format";
-import type { Affiliate, Campaign } from "@/lib/types";
+import type { Affiliate, Campaign, Page } from "@/lib/types";
 
 export const metadata = { title: "Affiliates" };
 
+const PATH = "/dashboard/affiliates";
 
-export default async function AffiliatesPage() {
-  const [affs, campaigns, fx] = await Promise.all([api<Affiliate[]>("/merchant/affiliates"), api<Campaign[]>("/merchant/campaigns"), api<Fx>("/merchant/fx")]);
+export default async function AffiliatesPage({ searchParams }: { searchParams: Promise<{ campaign?: string; q?: string; page?: string }> }) {
+  const sp = await searchParams;
+  const page = Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1);
+  const q = sp.q?.trim() || undefined;
+  const campaign = sp.campaign || undefined;
+  const qs = new URLSearchParams({ page: String(page) });
+  if (campaign) qs.set("campaign_id", campaign);
+  if (q) qs.set("q", q);
+  const [res, campaigns, fx] = await Promise.all([
+    api<Page<Affiliate> & { by_campaign: Record<string, number> }>(`/merchant/affiliates?${qs}`),
+    api<Campaign[]>("/merchant/campaigns"),
+    api<Fx>("/merchant/fx"),
+  ]);
+  const affs = res.items;
   const mixed = affs.some((a) => Object.values(a.earned).filter(Boolean).length > 1 || displayMoney(a.earned, fx).rest);
-  const campaignName = Object.fromEntries(campaigns.map((c) => [c.id, c.name]));
+  const linkParams = { campaign, q };
+  const everyone = Object.values(res.by_campaign).reduce((n, x) => n + x, 0);
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -40,18 +55,33 @@ export default async function AffiliatesPage() {
           </details>
         </div>
       </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <SearchBox path={PATH} params={linkParams} placeholder="Name, email or link" />
+        {campaigns.length > 1 && (
+          <div className="flex flex-wrap gap-1 text-sm" aria-label="Campaign">
+            {[{ id: undefined, name: "All campaigns", n: everyone }, ...campaigns.map((c) => ({ id: c.id, name: c.name, n: res.by_campaign[c.id] ?? 0 }))].map((c) => (
+              <Link key={c.id ?? "all"} href={listHref(PATH, { campaign: c.id, q })} className={`btn ${campaign === c.id ? "btn-primary" : "btn-secondary"}`}>
+                {c.name} <span className="num ml-1 opacity-70">{c.n.toLocaleString()}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
       <Card>
         {affs.length === 0 ? (
-          <Empty>No affiliates yet. Share your program page from the Overview.</Empty>
+          <Empty>{q ? `Nothing matches “${q}”.` : campaign ? "No affiliates on this campaign yet." : "No affiliates yet. Share your program page from the Overview."}</Empty>
         ) : (
-          <Table compact head={["Affiliate", "Status", "Link / code", "Clicks", "Signups", "Customers", "Earned", ""]}>
+          <Table compact head={["Affiliate", "Campaign", "Status", "Link / code", "Clicks", "Signups", "Customers", "Earned", ""]}>
             {affs.map((a) => (
               <tr key={a.id} className="align-top">
                 <td className="px-3 py-3 first:pl-5 last:pr-5">
                   <Link href={`/dashboard/affiliates/${a.id}`} className="font-medium hover:underline">{a.name || a.email}</Link>
                   <p className="text-xs text-muted">{a.email}</p>
-                  <p className="mt-1 text-xs text-muted">Joined {date(a.created_at)} · {campaignName[a.campaign_id]}</p>
+                  <p className="mt-1 text-xs text-muted">Joined {date(a.created_at)}</p>
                   {a.rate_override_description && <p className="mt-1 text-xs text-amber-800">Custom rate: {a.rate_override_description}</p>}
+                </td>
+                <td className="px-3 py-3 first:pl-5 last:pr-5">
+                  <Link href={listHref(PATH, { campaign: a.campaign_id })} className="hover:underline">{a.campaign_name}</Link>
                 </td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5">
                   <StatusBadge status={a.status} />
@@ -114,6 +144,7 @@ export default async function AffiliatesPage() {
           </Table>
         )}
       </Card>
+      <Pager path={PATH} params={linkParams} page={res.page} total={res.total} pageSize={res.page_size} />
       {mixed && <p className="text-xs text-muted">{fxNote(fx)}</p>}
     </div>
   );
