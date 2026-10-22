@@ -89,3 +89,45 @@ async def delete_referral(db: AsyncDatabase, merchant_id: str, referral_id: str,
         return r, commissions
 
     return await run_in_transaction(db, run)
+
+
+# Campaigns. Only an unused one can be deleted; one with history is archived instead, so
+# the commissions and rewards it made keep pointing at a campaign that still exists.
+USAGE = (("affiliates", "affiliate"), ("referrals", "referral"), ("commissions", "commission"), ("rewards", "reward"))
+
+
+async def campaign_usage(db: AsyncDatabase, merchant_id: str) -> dict[str, dict[str, int]]:
+    """{campaign_id: {"affiliates": n, "referrals": n, ...}}, counting test rows too."""
+    out: dict[str, dict[str, int]] = {}
+    for coll, _ in USAGE:
+        async for row in await db[coll].aggregate([{"$match": {"merchant_id": merchant_id}}, {"$group": {"_id": "$campaign_id", "n": {"$sum": 1}}}]):
+            out.setdefault(row["_id"], {})[coll] = row["n"]
+    return out
+
+
+def campaign_delete_blocked(c: dict, usage: dict[str, int]) -> str | None:
+    if c.get("is_default"):
+        return "This is your default campaign. Make another campaign the default first."
+    used = [f"{n} {word}{'' if n == 1 else 's'}" for coll, word in USAGE if (n := usage.get(coll, 0))]
+    if used and usage.get("affiliates") and len(used) == 1:
+        return f"It has {used[0]}. Move them to another campaign first, or archive it instead."
+    if used:
+        return f"It has {', '.join(used)}, which keep their record. Archive it instead."
+    return None
+
+
+async def delete_campaign(db: AsyncDatabase, merchant_id: str, campaign_id: str) -> dict:
+    async def run(tdb) -> dict:
+        c = await tdb.campaigns.find_one({"_id": campaign_id, "merchant_id": merchant_id})
+        if not c:
+            raise NotFound
+        usage = {coll: await tdb[coll].count_documents({"merchant_id": merchant_id, "campaign_id": campaign_id}, limit=1) for coll, _ in USAGE}
+        if reason := campaign_delete_blocked(c, usage):
+            raise Blocked(reason)
+        now = datetime.now(UTC)
+        await tdb.deleted_records.insert_one(_tombstone(merchant_id, "campaign", c, now, None))
+        await tdb.campaigns.delete_one({"_id": campaign_id})
+        await audit.record(tdb, merchant_id, "campaign.deleted", campaign_id, name=c["name"])
+        return c
+
+    return await run_in_transaction(db, run)

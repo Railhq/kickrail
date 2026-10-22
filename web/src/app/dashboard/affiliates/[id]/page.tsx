@@ -52,7 +52,7 @@ export default async function AffiliateDetail({ params, searchParams }: { params
             <input type="hidden" name="id" value={a.id} />
             <Field label="Campaign">
               <select name="campaign_id" defaultValue={a.campaign_id} className="input">
-                {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {campaigns.filter((c) => !c.archived || c.id === a.campaign_id).map((c) => <option key={c.id} value={c.id}>{c.name}{c.archived ? " (archived)" : ""}</option>)}
               </select>
             </Field>
             <Submit variant="secondary">Move</Submit>

@@ -38,7 +38,7 @@ async def program_terms(slug: str, db=Depends(db_dep)):
 async def _public_campaign(db, m: dict, campaign_slug: str) -> dict:
     """A campaign people can join on their own: public, or the default one."""
     c = await db.campaigns.find_one({"merchant_id": m["_id"], "slug": campaign_slug.lower()})
-    if not c or not (c.get("public") or c.get("is_default")):
+    if not c or c.get("archived_at") or not (c.get("public") or c.get("is_default")):
         raise HTTPException(404, "campaign not found")
     return c
 
