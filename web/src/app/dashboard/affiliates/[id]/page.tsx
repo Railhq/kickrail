@@ -14,12 +14,11 @@ export const metadata = { title: "Affiliate" };
 export default async function AffiliateDetail({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; page?: string }> }) {
   const { id } = await params;
   const sp = await searchParams;
-  const [view, affs, campaigns] = await Promise.all([
+  const [view, a, campaigns] = await Promise.all([
     authed<View & { affiliate: { name: string; email: string } }>(`/merchant/affiliates/${id}/view`, `/dashboard/affiliates/${id}`),
-    api<Affiliate[]>("/merchant/affiliates"),
+    authed<Affiliate>(`/merchant/affiliates/${id}`, `/dashboard/affiliates/${id}`),
     api<Campaign[]>("/merchant/campaigns"),
   ]);
-  const a = affs.find((x) => x.id === id);
   if (!view || !a) notFound();
   const campaign = campaigns.find((c) => c.id === a.campaign_id);
   const o = a.rate_override;

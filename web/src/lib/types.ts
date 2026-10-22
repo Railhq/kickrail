@@ -128,6 +128,7 @@ export type Affiliate = {
   id: string;
   name: string;
   email: string;
+  campaign_name: string;
   status: "pending" | "approved" | "rejected";
   token: string;
   code?: string;

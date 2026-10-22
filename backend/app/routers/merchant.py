@@ -681,10 +681,10 @@ async def make_default(campaign_id: str, m=Depends(current_merchant), db=Depends
 async def _affiliate_stats(db, merchant_id: str, affiliate_ids: list[str]) -> dict[str, dict]:
     # Money is kept per currency ({"usd": 1200, "inr": 99900}); adding rupees to dollars means nothing.
     stats: dict[str, dict] = {a: {"clicks": 0, "leads": 0, "customers": 0, "earned": {}, "paid": {}} for a in affiliate_ids}
-    async for row in await db.clicks.aggregate([{"$match": {"merchant_id": merchant_id, "test": False}}, {"$group": {"_id": "$affiliate_id", "n": {"$sum": 1}}}]):
+    async for row in await db.clicks.aggregate([{"$match": {"merchant_id": merchant_id, "affiliate_id": {"$in": affiliate_ids}, "test": False}}, {"$group": {"_id": "$affiliate_id", "n": {"$sum": 1}}}]):
         if row["_id"] in stats:
             stats[row["_id"]]["clicks"] = row["n"]
-    async for row in await db.referrals.aggregate([{"$match": {"merchant_id": merchant_id, "test": {"$ne": True}}}, {"$group": {"_id": {"a": "$affiliate_id", "s": "$status"}, "n": {"$sum": 1}}}]):
+    async for row in await db.referrals.aggregate([{"$match": {"merchant_id": merchant_id, "affiliate_id": {"$in": affiliate_ids}, "test": {"$ne": True}}}, {"$group": {"_id": {"a": "$affiliate_id", "s": "$status"}, "n": {"$sum": 1}}}]):
         a = row["_id"]["a"]
         if a in stats:
             stats[a]["leads"] += row["n"]
@@ -701,27 +701,27 @@ async def _affiliate_stats(db, merchant_id: str, affiliate_ids: list[str]) -> di
     return stats
 
 
-@router.get("/affiliates")
-async def list_affiliates(m=Depends(current_merchant), db=Depends(db_dep)):
-    affs = await db.affiliates.find({"merchant_id": m["_id"]}).sort("created_at", -1).to_list(None)
+async def _affiliate_rows(db, m: dict, affs: list[dict]) -> list[dict]:
+    ids = [a["_id"] for a in affs]
     users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}})}
-    stats = await _affiliate_stats(db, m["_id"], [a["_id"] for a in affs])
-    landing = {c["_id"]: c.get("landing_url") async for c in db.campaigns.find({"merchant_id": m["_id"]}, {"landing_url": 1})}
+    stats = await _affiliate_stats(db, m["_id"], ids)
+    campaigns = {c["_id"]: c async for c in db.campaigns.find({"merchant_id": m["_id"]}, {"landing_url": 1, "name": 1})}
     links: dict[str, list] = {}
-    async for l in db.affiliate_links.find({"merchant_id": m["_id"]}).sort("created_at", 1):
+    async for l in db.affiliate_links.find({"merchant_id": m["_id"], "affiliate_id": {"$in": ids}}).sort("created_at", 1):
         links.setdefault(l["affiliate_id"], []).append(link_obj(m, l))
     codes: dict[str, list] = {}
-    async for c in db.affiliate_codes.find({"merchant_id": m["_id"]}).sort("created_at", 1):
+    async for c in db.affiliate_codes.find({"merchant_id": m["_id"], "affiliate_id": {"$in": ids}}).sort("created_at", 1):
         codes.setdefault(c["affiliate_id"], []).append(code_obj(c))
     return [
         {
             **out(a, "metadata"),
             "name": users.get(a["user_id"], {}).get("name", ""),
             "email": users.get(a["user_id"], {}).get("email", ""),
+            "campaign_name": campaigns.get(a["campaign_id"], {}).get("name", ""),
             "payouts_enabled": bool(users.get(a["user_id"], {}).get("payouts_enabled")),
             "can_be_paid": can_be_paid(users.get(a["user_id"], {})),
             "tax_form": (users.get(a["user_id"], {}).get("tax_info") or {}).get("form"),
-            "link": affiliate_url(m, a["token"], landing.get(a["campaign_id"])),
+            "link": affiliate_url(m, a["token"], campaigns.get(a["campaign_id"], {}).get("landing_url")),
             "links": links.get(a["_id"], []),
             "codes": codes.get(a["_id"], []),
             "rate_override_description": describe_rate(a["rate_override"]) if a.get("rate_override") else None,
@@ -729,6 +729,39 @@ async def list_affiliates(m=Depends(current_merchant), db=Depends(db_dep)):
         }
         for a in affs
     ]
+
+
+@router.get("/affiliates")
+async def list_affiliates(
+    campaign_id: str | None = None,
+    status: Literal["pending", "approved", "rejected"] | None = None,
+    q: str = Query("", max_length=200),
+    page: int = Query(1, ge=1, le=10_000),
+    m=Depends(current_merchant),
+    db=Depends(db_dep),
+):
+    """A page of affiliates, newest first. A program can have tens of thousands
+    (every customer, on a customer-referral campaign), so this never returns them all."""
+    base: dict = {"merchant_id": m["_id"]}
+    query = dict(base)
+    if campaign_id:
+        query["campaign_id"] = campaign_id
+    if status:
+        query["status"] = status
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        query["_id"] = {"$in": await _matching_affiliates(db, m["_id"], rx)}
+    affs, total = await _page(db.affiliates, query, page)
+    by_campaign = {row["_id"]: row["n"] async for row in await db.affiliates.aggregate([{"$match": base}, {"$group": {"_id": "$campaign_id", "n": {"$sum": 1}}}])}
+    return {"items": await _affiliate_rows(db, m, affs), "total": total, "page": page, "page_size": PAGE_SIZE, "by_campaign": by_campaign}
+
+
+@router.get("/affiliates/{affiliate_id}")
+async def get_affiliate(affiliate_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
+    a = await db.affiliates.find_one({"_id": affiliate_id, "merchant_id": m["_id"]})
+    if not a:
+        raise HTTPException(404, "affiliate not found")
+    return (await _affiliate_rows(db, m, [a]))[0]
 
 
 class AffiliateAdd(BaseModel):
@@ -905,7 +938,7 @@ async def list_referrals(
         rx = {"$regex": re.escape(q.strip()), "$options": "i"}
         query["$or"] = [{"email": rx}, {"stripe_customer_id": rx}, {"external_user_id": rx}, {"via.token": rx}, {"via.code": rx}, {"affiliate_id": {"$in": await _matching_affiliates(db, m["_id"], rx)}}]
     refs, total = await _page(db.referrals, query, page)
-    names = await _affiliate_names(db, m["_id"])
+    names = await _affiliate_names(db, m["_id"], [r["affiliate_id"] for r in refs])
     return {"items": [{**out(r), "affiliate_name": names.get(r["affiliate_id"], "")} for r in refs], "total": total, "page": page, "page_size": PAGE_SIZE}
 
 
@@ -1001,8 +1034,8 @@ async def delete_commission(commission_id: str, body: DeleteIn | None = None, m=
     return {"ok": True}
 
 
-async def _affiliate_names(db, merchant_id: str) -> dict[str, str]:
-    affs = await db.affiliates.find({"merchant_id": merchant_id}, {"user_id": 1}).to_list(None)
+async def _affiliate_names(db, merchant_id: str, ids) -> dict[str, str]:
+    affs = await db.affiliates.find({"merchant_id": merchant_id, "_id": {"$in": list(set(ids))}}, {"user_id": 1}).to_list(None)
     users = {u["_id"]: u["name"] async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}}, {"name": 1})}
     return {a["_id"]: users.get(a["user_id"], "") for a in affs}
 
@@ -1032,7 +1065,7 @@ async def list_rewards(
         refs = [r["_id"] async for r in db.referrals.find({"merchant_id": m["_id"], "$or": [{"email": rx}, {"external_user_id": rx}, {"stripe_customer_id": rx}]}, {"_id": 1})]
         query["$or"] = [{"description": rx}, {"referral_id": {"$in": refs}}, {"affiliate_id": {"$in": await _matching_affiliates(db, m["_id"], rx)}}]
     rows, total = await _page(db.rewards, query, page)
-    names = await _affiliate_names(db, m["_id"])
+    names = await _affiliate_names(db, m["_id"], [w["affiliate_id"] for w in rows])
     emails = {r["_id"]: r.get("email") async for r in db.referrals.find({"_id": {"$in": [w["referral_id"] for w in rows]}}, {"email": 1})}
     counts = {row["_id"]: row["n"] async for row in await db.rewards.aggregate([{"$match": {"merchant_id": m["_id"]}}, {"$group": {"_id": "$status", "n": {"$sum": 1}}}])}
     return {
@@ -1090,7 +1123,7 @@ async def list_commissions(
         refs = [x["_id"] async for x in db.referrals.find({"merchant_id": m["_id"], "$or": [{"email": rx}, {"stripe_customer_id": rx}, {"external_user_id": rx}]}, {"_id": 1}).limit(1000)]
         query["$or"] = [{"source_key": rx}, {"referral_id": {"$in": refs}}, {"affiliate_id": {"$in": await _matching_affiliates(db, m["_id"], rx)}}]
     rows, total = await _page(db.commissions, query, page)
-    names = await _affiliate_names(db, m["_id"])
+    names = await _affiliate_names(db, m["_id"], [c["affiliate_id"] for c in rows])
     emails = {x["_id"]: x.get("email") async for x in db.referrals.find({"_id": {"$in": [c["referral_id"] for c in rows if c.get("referral_id")]}}, {"email": 1})}
     items = [{**out(c), "affiliate_name": names.get(c["affiliate_id"], ""), "customer": emails.get(c.get("referral_id"))} for c in rows]
     return {"items": items, "total": total, "page": page, "page_size": PAGE_SIZE}
@@ -1248,10 +1281,14 @@ async def due_csv(currency: str | None = None, m=Depends(current_merchant), db=D
 
 @router.get("/tax")
 async def tax_forms(m=Depends(current_merchant), db=Depends(db_dep)):
-    affs = await db.affiliates.find({"merchant_id": m["_id"], "status": {"$ne": "rejected"}}).to_list(None)
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}})}
     year = datetime.now(UTC).year
     paid = await _paid_by_affiliate(db, m["_id"], year)
+    # Affiliates on a campaign whose reward isn't cash are never paid, so they never need a
+    # tax form, and a customer-referral program can have one per customer. They stay listed
+    # if they were paid this year.
+    custom = [c["_id"] async for c in db.campaigns.find({"merchant_id": m["_id"], "reward.type": "custom"}, {"_id": 1})]
+    affs = await db.affiliates.find({"merchant_id": m["_id"], "status": {"$ne": "rejected"}, "$or": [{"campaign_id": {"$nin": custom}}, {"_id": {"$in": list(paid)}}]}).to_list(None)
+    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}})}
     rows = []
     for a in affs:
         u = users.get(a["user_id"], {})
