@@ -12,6 +12,7 @@ from ..crypto import encrypt
 from ..deps import merchant_api_factory, platform_api
 from ..security import client_ip_hash, current_user, db_dep, public_user
 from ..services.affiliates import AffiliateError, add_link, affiliate_view, create_affiliate, pipeline, program_public
+from ..services import terms
 from .merchant import out
 
 router = APIRouter(tags=["portal"])
@@ -24,6 +25,14 @@ async def program(slug: str, db=Depends(db_dep)):
         raise HTTPException(404, "program not found")
     campaign = await db.campaigns.find_one({"merchant_id": m["_id"], "is_default": True})
     return program_public(m, campaign)
+
+
+@router.get("/programs/{slug}/terms")
+async def program_terms(slug: str, db=Depends(db_dep)):
+    m = await db.merchants.find_one({"slug": slug})
+    if not m or not m.get("terms"):
+        raise HTTPException(404, "no terms")
+    return {"program": program_public(m, None), "terms": terms.public(m)}
 
 
 async def _public_campaign(db, m: dict, campaign_slug: str) -> dict:

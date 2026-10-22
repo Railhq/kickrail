@@ -75,3 +75,7 @@ export const referralSource = (source: string) => SOURCES[source] ?? source;
 
 /** How to name a referred customer: email, else your user id, else the Stripe customer. */
 export const referralWho = (r: { email?: string | null; external_user_id?: string; stripe_customer_id?: string }) => r.email ?? r.external_user_id ?? r.stripe_customer_id ?? "unknown";
+
+export function fileSize(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}

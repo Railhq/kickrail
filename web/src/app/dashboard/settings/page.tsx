@@ -2,6 +2,7 @@ import { addDomain, connectPayPal, disconnectPayPal, makePrimaryDomain, removeDo
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge, Card, Code, Field, Notice } from "@/components/ui";
+import { ImageUrlField } from "@/components/Upload";
 import { api, siteUrl } from "@/lib/backend";
 import { date } from "@/lib/format";
 import type { Import, Merchant } from "@/lib/types";
@@ -19,6 +20,7 @@ const EMAIL_KINDS: [string, string][] = [
   ["commission", "Email the affiliate for every new commission"],
   ["payout", "Email the affiliate when a payout is sent"],
   ["new_affiliate", "Email your team when someone applies"],
+  ["self_referral", "Email your team when a referral looks like a self-referral"],
 ];
 
 const PERMS = [
@@ -149,6 +151,10 @@ stripe.customers.create({ email, metadata: { kr_ref: req.cookies.kr_ref } });`;
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="require_tax_form" defaultChecked={m.settings.require_tax_form} /> Require a signed W-9 or W-8 before an affiliate can be paid
             </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" name="reject_self_referrals" className="mt-1" defaultChecked={m.settings.reject_self_referrals} />
+              <span>Reject suspected self-referrals automatically <span className="text-muted">Otherwise they&apos;re held until you approve or reject them. Either way your team gets an email, if that&apos;s on below.</span></span>
+            </label>
           </div>
           <fieldset className="space-y-2 sm:col-span-2">
             <legend className="mb-1 text-sm font-medium">When two affiliates refer the same person</legend>
@@ -168,12 +174,12 @@ stripe.customers.create({ email, metadata: { kr_ref: req.cookies.kr_ref } });`;
       <Card title="Branding">
         <p className="mb-4 text-sm text-muted">Shown on your join page, in the affiliate portal and in every email Kickrail sends for you.</p>
         <ActionForm action={saveBranding} className="grid gap-4 sm:grid-cols-2">
-          <Field label="Logo URL" hint="A square PNG or SVG works best."><input className="input" name="logo_url" type="url" defaultValue={m.branding.logo_url ?? ""} placeholder="https://…/logo.png" /></Field>
+          <Field label="Logo" hint="A square PNG or SVG works best. Upload one or paste a URL."><ImageUrlField name="logo_url" kind="logo" defaultValue={m.branding.logo_url ?? ""} placeholder="https://…/logo.png" /></Field>
+          <Field label="Favicon" hint="The tab icon on your join page and portal. 32×32 or larger, PNG or ICO."><ImageUrlField name="favicon_url" kind="favicon" defaultValue={m.branding.favicon_url ?? ""} placeholder="https://…/favicon.png" /></Field>
           <Field label="Brand colour">
             <input className="input font-mono" name="color" defaultValue={m.branding.color ?? ""} placeholder="#0f5e4b" pattern="#[0-9a-fA-F]{6}" />
           </Field>
           <Field label="Join page headline"><input className="input" name="headline" maxLength={120} defaultValue={m.branding.headline ?? ""} placeholder={`Partner with ${m.name}`} /></Field>
-          <Field label="Terms URL"><input className="input" name="terms_url" type="url" defaultValue={m.branding.terms_url ?? ""} /></Field>
           <div className="sm:col-span-2"><Field label="Join page description"><textarea className="input min-h-20" name="description" maxLength={2000} defaultValue={m.branding.description ?? ""} /></Field></div>
           <div className="sm:col-span-2"><Field label="Welcome message" hint="Added to the approval email and shown at the top of an approved affiliate's portal."><textarea className="input min-h-16" name="welcome_message" maxLength={1000} defaultValue={m.branding.welcome_message ?? ""} /></Field></div>
           <Field label="Reply-to email" hint="Where affiliate replies go. Defaults to the workspace owner."><input className="input" name="reply_to" type="email" defaultValue={m.branding.reply_to ?? ""} /></Field>
@@ -222,7 +228,7 @@ stripe.customers.create({ email, metadata: { kr_ref: req.cookies.kr_ref } });`;
         )}
       </Card>
 
-      <Card title="Emails to affiliates">
+      <Card title="Emails">
         <p className="mb-4 text-sm text-muted">Sent from your program name, with your branding. Every email is listed under <a className="link" href="/dashboard/emails">Emails</a>.</p>
         <ActionForm action={saveEmailSettings} className="space-y-2">
           {EMAIL_KINDS.map(([k, label]) => (

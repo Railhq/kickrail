@@ -18,6 +18,7 @@ EMAIL_KINDS = {
     "commission": "Email the affiliate for every new commission",
     "payout": "Email the affiliate when a payout is sent",
     "new_affiliate": "Email your team when someone applies",
+    "self_referral": "Email your team when a referral looks like a self-referral",
 }
 
 
@@ -126,6 +127,24 @@ async def affiliate_updated(db: AsyncDatabase, m: dict, aff: dict, old_status: s
 
 async def referral_created(db: AsyncDatabase, merchant_id: str, r: dict) -> None:
     await emit(db, merchant_id, "referral.created", referral_obj(r))
+
+
+async def self_referral(db: AsyncDatabase, m: dict, r: dict) -> None:
+    """Tells the team a new referral looks like the affiliate referring themself."""
+    if r.get("test") or not email_on(m, "self_referral"):
+        return
+    aff = await db.affiliates.find_one({"_id": r["affiliate_id"]}, {"user_id": 1}) or {}
+    user = await db.users.find_one({"_id": aff.get("user_id")}, {"name": 1, "email": 1}) or {}
+    who = user.get("name") or user.get("email") or "an affiliate"
+    outcome = "It was rejected automatically, as your settings ask, so it earns nothing." if r.get("rejected") else "Its commissions and rewards are held until you approve or reject it."
+    reasons = [f["detail"] for f in r.get("flags") or []]
+    members = await db.users.find({"_id": {"$in": m.get("member_ids", [])}}, {"email": 1}).to_list(None)
+    for member in members:
+        await _send(
+            db, m, member["email"], "self_referral", f"Possible self-referral by {who}", "This referral may be a self-referral",
+            [f"{who} referred {r.get('email') or 'a new signup'}, which looks like it may be themself.", *reasons, outcome],
+            ("Review the referral", f"{get_settings().public_url}/dashboard/referrals/{r['_id']}"),
+        )
 
 
 async def referral_updated(db: AsyncDatabase, merchant_id: str, r: dict, previous_affiliate_id: str) -> None:

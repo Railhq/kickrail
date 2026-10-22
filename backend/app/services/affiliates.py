@@ -14,7 +14,7 @@ from ..domain.commission import describe_rule, is_custom
 from ..ids import new_id, random_id, sha256, slugify
 from ..security import can_be_paid
 from ..serializers import affiliate_url, code_obj, link_obj, portal_base
-from . import fx, notify
+from . import assets, fx, notify
 from .referrals import code_taken, token_taken
 
 TOKEN = re.compile(r"^[a-z0-9_-]{3,32}$")
@@ -36,7 +36,9 @@ def program_public(m: dict, campaign: dict | None) -> dict:
         "website": m["website"],
         "terms": describe_rule(campaign) if campaign else None,
         "hold_days": campaign["hold_days"] if campaign else None,
-        "branding": {k: b.get(k) for k in ("logo_url", "color", "headline", "description", "welcome_message", "terms_url")},
+        "branding": {k: b.get(k) for k in ("logo_url", "favicon_url", "color", "headline", "description", "welcome_message", "terms_url")},
+        # A hosted terms page, written in the dashboard. An external terms_url wins over it.
+        "has_terms": bool(m.get("terms")),
         # Free and Starter programs show "Powered by Kickrail" on the join page and portal.
         "powered_by": plans.current(m)["branding"],
     }
@@ -256,6 +258,7 @@ async def affiliate_view(db: AsyncDatabase, m: dict, aff: dict, user: dict) -> d
         "fx": await fx.for_display(db, m["settings"].get("display_currency") or "usd"),
         # "custom": the program rewards with something other than cash, so the portal shows rewards, not money.
         "reward_mode": "custom" if is_custom(campaign) else "cash",
+        "assets": await assets.for_affiliate(db, m, aff, link),
         **await pipeline(db, aff),
     }
 

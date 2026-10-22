@@ -24,7 +24,7 @@ from ..security import MAX_PROGRAMS, can_be_paid, current_merchant, current_user
 from ..serializers import affiliate_url, code_obj, join_url, link_obj, portal_base
 from ..services import audit, fx, notify
 from ..services import payouts as payout_svc
-from ..services import deletion, rewardful_import, rewards, stripe_sync
+from ..services import deletion, rewardful_import, rewards, stripe_sync, terms
 from ..services.exports import EXPORTS
 from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, sync_campaign_codes, sync_promotion_code
 from ..services.notify import EMAIL_KINDS
@@ -41,7 +41,7 @@ def out(doc: dict | None, *drop: str) -> dict | None:
     return d
 
 
-DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False, "attribution": "first", "display_currency": "usd"}
+DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False, "reject_self_referrals": False, "attribution": "first", "display_currency": "usd"}
 
 
 def plan_summary(m: dict, plan: dict | None = None) -> dict:
@@ -68,6 +68,7 @@ def merchant_out(m: dict) -> dict:
         "secret_key_hint": m["secret_key_hint"],
         "settings": DEFAULT_SETTINGS | m["settings"] | {"emails": {k: notify.email_on(m, k) for k in EMAIL_KINDS}},
         "branding": m.get("branding") or {},
+        "terms": terms.public(m),
         # Oldest first. Past the plan's limit (after a downgrade) they keep working; only adding is blocked.
         "portal_domains": [{**d, "over_limit": i >= plan["domains"]} for i, d in enumerate(sorted(m.get("portal_domains") or [], key=lambda d: d["added_at"]))],
         "domain_limit": plan["domains"],
@@ -157,6 +158,7 @@ class SettingsIn(BaseModel):
     auto_approve: bool | None = None
     affiliate_links: bool | None = None
     require_tax_form: bool | None = None
+    reject_self_referrals: bool | None = None
     attribution: Literal["first", "last"] | None = None
     emails: dict[str, bool] | None = None
     display_currency: str | None = None
@@ -169,7 +171,7 @@ async def update_merchant(body: SettingsIn, m=Depends(current_merchant), db=Depe
         s["name"] = body.name.strip()
     if body.website is not None:
         s["website"] = str(body.website).rstrip("/")
-    for k in ("cookie_days", "auto_approve", "affiliate_links", "require_tax_form", "attribution"):
+    for k in ("cookie_days", "auto_approve", "affiliate_links", "require_tax_form", "reject_self_referrals", "attribution"):
         if getattr(body, k) is not None:
             s[f"settings.{k}"] = getattr(body, k)
     if body.display_currency is not None:
@@ -192,6 +194,7 @@ async def update_merchant(body: SettingsIn, m=Depends(current_merchant), db=Depe
 
 class BrandingIn(BaseModel):
     logo_url: HttpUrl | None = None
+    favicon_url: HttpUrl | None = None
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     headline: str = Field(default="", max_length=120)
     description: str = Field(default="", max_length=2000)
@@ -202,9 +205,29 @@ class BrandingIn(BaseModel):
 
 @router.put("/branding")
 async def update_branding(body: BrandingIn, m=Depends(current_merchant), db=Depends(db_dep)):
-    branding = {k: (str(v) if isinstance(v, HttpUrl) else v) for k, v in body.model_dump().items() if v}
+    # Fields left out keep their value, so the terms page and the logo upload can each save their own part.
+    sent = {k: (str(v) if isinstance(v, HttpUrl) else v) for k, v in body.model_dump().items() if k in body.model_fields_set}
+    branding = {k: v for k, v in ((m.get("branding") or {}) | sent).items() if v}
     await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"branding": branding}})
     return merchant_out({**m, "branding": branding})
+
+
+class TermsIn(BaseModel):
+    title: str = Field(default="Terms of Service", max_length=120)
+    html: str = Field(default="", max_length=terms.MAX_HTML)
+    # A terms page on the program's own site. When set, it is linked instead of the hosted page.
+    external_url: HttpUrl | None = None
+
+
+@router.put("/terms")
+async def update_terms(body: TermsIn, m=Depends(current_merchant), db=Depends(db_dep)):
+    """Empty content removes the hosted page; an external terms URL in branding still works."""
+    html = terms.clean(body.html)
+    doc = {"title": body.title.strip() or "Terms of Service", "html": html, "updated_at": datetime.now(UTC)} if html else None
+    branding = {k: v for k, v in (m.get("branding") or {}).items() if k != "terms_url"} | ({"terms_url": str(body.external_url)} if body.external_url else {})
+    await db.merchants.update_one({"_id": m["_id"]}, {"$set": {"branding": branding, **({"terms": doc} if doc else {})}, **({} if doc else {"$unset": {"terms": ""}})})
+    await audit.record(db, m["_id"], "terms.updated", m["_id"], removed=not html, external_url=branding.get("terms_url"))
+    return merchant_out({k: v for k, v in m.items() if k != "terms"} | {"branding": branding} | ({"terms": doc} if doc else {}))
 
 
 # ---------- custom portal domain ----------
@@ -563,6 +586,8 @@ def rule_doc(r: RuleIn) -> dict:
 
 
 CAMPAIGN_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,39}$")
+# /join/<program>/terms is the hosted terms page.
+RESERVED_CAMPAIGN_SLUGS = {"terms"}
 
 
 def _campaign_fields(b: CampaignIn, m: dict) -> dict:
@@ -586,6 +611,8 @@ def _campaign_fields(b: CampaignIn, m: dict) -> dict:
     slug = (b.slug or "").strip().lower() or (slugify(b.name)[:40] if b.public else "")
     if slug and not CAMPAIGN_SLUG.match(slug):
         raise HTTPException(422, "join page names are 2-40 lowercase letters, digits or -")
+    if slug in RESERVED_CAMPAIGN_SLUGS:
+        raise HTTPException(422, f"{slug} is used by Kickrail's own pages; pick another join page name")
     try:
         landing = check_landing(m, b.landing_url)
     except AffiliateError as e:

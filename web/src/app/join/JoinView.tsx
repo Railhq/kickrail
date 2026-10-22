@@ -4,7 +4,12 @@ import { Logo } from "@/components/Logo";
 import { api, ApiError } from "@/lib/backend";
 import type { Branding } from "@/lib/types";
 
-export type Program = { slug: string; campaign: string | null; name: string; website: string; terms: string | null; hold_days: number | null; branding: Branding; powered_by: boolean };
+export type Program = { slug: string; campaign: string | null; name: string; website: string; terms: string | null; hold_days: number | null; branding: Branding; has_terms: boolean; powered_by: boolean };
+
+/** The program's terms: their own page if they gave one, else the one hosted here. */
+export function termsHref(p: { slug: string; branding: Branding; has_terms: boolean }) {
+  return p.branding.terms_url || (p.has_terms ? `/join/${p.slug}/terms` : null);
+}
 
 export async function load(slug: string, campaign?: string) {
   try {
@@ -16,11 +21,12 @@ export async function load(slug: string, campaign?: string) {
 }
 
 export function joinMetadata(p: Program) {
-  return { title: p.branding.headline || `${p.name} affiliate program`, description: p.branding.description || p.terms || undefined };
+  return { title: p.branding.headline || `${p.name} affiliate program`, description: p.branding.description || p.terms || undefined, icons: p.branding.favicon_url ? { icon: p.branding.favicon_url } : undefined };
 }
 
 export function JoinView({ p }: { p: Program }) {
   const b = p.branding;
+  const terms = termsHref(p);
   return (
     <div className="mx-auto flex min-h-screen max-w-lg flex-col px-4 py-12">
       {b.logo_url ? (
@@ -46,7 +52,7 @@ export function JoinView({ p }: { p: Program }) {
         <form action={joinProgram.bind(null, p.slug, p.campaign)} className="mt-8">
           <button className="btn btn-primary w-full py-2.5" style={b.color ? { background: b.color, borderColor: b.color } : undefined}>Join program</button>
         </form>
-        {b.terms_url && <p className="mt-3 text-center text-xs text-muted">By joining you agree to the <a className="underline" href={b.terms_url} target="_blank" rel="noopener">program terms</a>.</p>}
+        {terms && <p className="mt-3 text-center text-xs text-muted">By joining you agree to the <a className="underline" href={terms} target="_blank" rel="noopener">program terms</a>.</p>}
         <p className="mt-3 text-center text-xs text-muted">Already promote another Kickrail program? Use the same login.</p>
       </div>
       {p.powered_by && (
