@@ -3,7 +3,8 @@ their Stripe dashboard and their own code can read it from customer.metadata.
 
 A referral that gains a Stripe customer, or moves to another affiliate, is marked
 `stripe_sync_due`; the dispatcher writes it in the background and retries on errors.
-The keys are kickrail_* so they never look like the kr_ref / kr_via / kr_code we read.
+The keys are kickrail_* (plus a "View in Kickrail" link) so they never look like the
+kr_ref / kr_via / kr_code we read.
 """
 
 import logging
@@ -12,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 import stripe
 from pymongo.asynchronous.database import AsyncDatabase
 
+from ..config import get_settings
 from .outbox import wake
 
 log = logging.getLogger(__name__)
@@ -27,6 +29,8 @@ def customer_metadata(referral: dict, affiliate: dict | None) -> dict:
         "kickrail_affiliate": referral["affiliate_id"],
         "kickrail_affiliate_token": (affiliate or {}).get("token") or "",
         "kickrail_campaign": referral.get("campaign_id") or "",
+        # Stripe shows a URL value as a link, so the customer page links straight to the referral.
+        "View in Kickrail": f"{get_settings().public_url}/dashboard/referrals/{referral['_id']}",
     }
 
 

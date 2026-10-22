@@ -385,7 +385,7 @@ async def test_referrer_is_written_onto_the_stripe_customer(db, fakes):
     await sync_customers(db, lambda _m: fakes["merchant"])
     r = await db.referrals.find_one({"stripe_customer_id": "cus_synced"})
     assert fakes["merchant"].customer_metadata["cus_synced"] == {
-        "kickrail_referral": r["_id"], "kickrail_affiliate": S["aff_id"], "kickrail_affiliate_token": S["token"], "kickrail_campaign": r["campaign_id"],
+        "kickrail_referral": r["_id"], "kickrail_affiliate": S["aff_id"], "kickrail_affiliate_token": S["token"], "kickrail_campaign": r["campaign_id"], "View in Kickrail": f"https://kickrail.test/dashboard/referrals/{r['_id']}",
     }
     assert "stripe_sync_due" not in r and r["stripe_synced_at"]
     gone = await db.referrals.find_one({"stripe_customer_id": "cus_gone"})
