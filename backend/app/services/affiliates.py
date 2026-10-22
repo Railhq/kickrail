@@ -74,7 +74,9 @@ async def create_affiliate(
         if not token and await db.affiliate_links.find_one({"merchant_id": m["_id"], "token": t}):
             continue
         c = code.upper() if code else t.upper()[:20]
-        if not code and await db.affiliate_codes.find_one({"merchant_id": m["_id"], "code": c}):
+        # The automatic code is the link name cut to 20 characters, so two long link names
+        # can share one; the second affiliate then simply has no code.
+        if not code and await code_taken(db, m["_id"], c):
             c = None
         doc = {**aff, "_id": new_id("aff"), "token": t, "code": c}
         doc = {k: v for k, v in doc.items() if v is not None}
