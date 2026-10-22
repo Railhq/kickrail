@@ -28,6 +28,8 @@ export default async function AffiliatesPage({ searchParams }: { searchParams: P
   const mixed = affs.some((a) => Object.values(a.earned).filter(Boolean).length > 1 || displayMoney(a.earned, fx).rest);
   const linkParams = { campaign, q };
   const everyone = Object.values(res.by_campaign).reduce((n, x) => n + x, 0);
+  // Campaigns that hand out rewards instead of cash: no money columns, no payout details needed.
+  const customReward = new Set(campaigns.filter((c) => c.reward?.type === "custom").map((c) => c.id));
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -71,7 +73,7 @@ export default async function AffiliatesPage({ searchParams }: { searchParams: P
         {affs.length === 0 ? (
           <Empty>{q ? `Nothing matches “${q}”.` : campaign ? "No affiliates on this campaign yet." : "No affiliates yet. Share your program page from the Overview."}</Empty>
         ) : (
-          <Table compact head={["Affiliate", "Campaign", "Status", "Link / code", "Clicks", "Signups", "Customers", "Earned", ""]}>
+          <Table compact head={["Affiliate", "Campaign", "Status", "Link / code", "Referrals", "Earned", ""]}>
             {affs.map((a) => (
               <tr key={a.id} className="align-top">
                 <td className="px-3 py-3 first:pl-5 last:pr-5">
@@ -85,7 +87,7 @@ export default async function AffiliatesPage({ searchParams }: { searchParams: P
                 </td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5">
                   <StatusBadge status={a.status} />
-                  {!a.can_be_paid && a.status === "approved" && <p className="mt-1 text-xs text-muted">no payout details yet</p>}
+                  {!a.can_be_paid && a.status === "approved" && !customReward.has(a.campaign_id) && <p className="mt-1 text-xs text-muted">no payout details yet</p>}
                   {a.tax_form && <p className="mt-1 text-xs text-muted">{a.tax_form === "w9" ? "W-9" : a.tax_form === "w8ben" ? "W-8BEN" : "W-8BEN-E"} on file</p>}
                 </td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5">
@@ -102,11 +104,15 @@ export default async function AffiliatesPage({ searchParams }: { searchParams: P
                     </p>
                   )}
                 </td>
-                <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.clicks}</td>
-                <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.leads}</td>
-                <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.customers}</td>
+                <td className="whitespace-nowrap px-3 py-3 text-xs text-muted first:pl-5 last:pr-5">
+                  <p><span className="num text-sm text-fg">{a.customers.toLocaleString()}</span> customers</p>
+                  <p className="mt-1"><span className="num">{a.leads.toLocaleString()}</span> signups</p>
+                  <p><span className="num">{a.clicks.toLocaleString()}</span> clicks</p>
+                </td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5 num">
-                  {(() => {
+                  {customReward.has(a.campaign_id) ? (
+                    <span className="text-xs text-muted">rewards, not cash</span>
+                  ) : (() => {
                     const [earned, paid] = [displayMoney(a.earned, fx), displayMoney(a.paid, fx)];
                     return (
                       <div className="whitespace-nowrap">
