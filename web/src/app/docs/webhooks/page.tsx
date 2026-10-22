@@ -34,6 +34,8 @@ export default function Webhooks() {
           ["commission.updated", "commission", "A refund shrank or voided it, you released it from review, or you rejected its referral."],
           ["commission.deleted", "commission", <>You deleted it in the dashboard, or deleted its referral. Only unpaid commissions outside a payout can be deleted. Has <C>deleted: true</C>.</>],
           ["payout.due", "payout_due", <>An affiliate&apos;s balance became payable: a commission finished its hold and the balance meets the campaign&apos;s minimum. Sent each time a new commission becomes payable, not again for the same one. Has <C>affiliate_id</C>, <C>campaign_id</C>, <C>email</C>, <C>name</C>, the affiliate&apos;s <C>metadata</C>, <C>currency</C>, <C>amount_cents</C> (the whole payable balance), <C>commission_ids</C> and <C>needs_tax_form</C>. Use it to give a reward in kind, such as a discount, then record it with <Link className="link" href="/docs/api#record-payout">POST /v1/payouts</Link>.</>],
+          ["reward.earned", "reward", <>A custom reward was earned (or released from review). Hand it out, then call <Link className="link" href="/docs/api#rewards">POST /v1/rewards/&#123;id&#125;/fulfill</Link>. <C>recipient</C> says whether it&apos;s for the affiliate or the referred <C>customer</C>.</>],
+          ["reward.fulfilled", "reward", "A reward was marked fulfilled, over the API or in the dashboard."],
           ["payout.paid", "payout", <>A payout went out. <C>items[].commission_ids</C> lists the commissions it paid.</>],
           ["payout.failed", "payout", "A PayPal or Stripe payout failed in full or in part. The failed commissions are payable again."],
           ["payout.undone", "payout", "You undid a manual payout."],

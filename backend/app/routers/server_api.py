@@ -14,7 +14,8 @@ from ..deps import merchant_api_factory
 from ..ids import hash_ip
 from .. import plans
 from ..security import api_merchant, db_dep
-from ..serializers import affiliate_obj, commission_obj, payout_obj, referral_obj
+from ..serializers import affiliate_obj, commission_obj, payout_obj, referral_obj, reward_obj
+from ..services import rewards
 from ..services.affiliates import AffiliateError, add_by_email
 from ..services.payouts import create_payout, payable
 from ..services.referrals import AttachInput, attach_referral, find_referral
@@ -193,6 +194,48 @@ async def get_commission(commission_id: str, m=Depends(managed_api), db=Depends(
     if not c:
         raise HTTPException(404, "no such commission")
     return commission_obj(c)
+
+
+async def _reward_out(db, r: dict) -> dict:
+    return reward_obj(r, await db.referrals.find_one({"_id": r["referral_id"]}))
+
+
+@router.get("/rewards")
+async def list_rewards(
+    limit: int = Limit, starting_after: str | None = None, affiliate_id: str | None = None, referral_id: str | None = None,
+    status: Literal["earned", "fulfilled", "void"] | None = None, recipient: Literal["affiliate", "customer"] | None = None,
+    m=Depends(managed_api), db=Depends(db_dep),
+):
+    """Rewards from campaigns whose reward isn't cash. Held ones (a possible self-referral) are
+    listed but can't be fulfilled until you approve the referral."""
+    q = {"merchant_id": m["_id"]} | {k: v for k, v in {"affiliate_id": affiliate_id, "referral_id": referral_id, "status": status, "recipient": recipient}.items() if v}
+
+    async def shape(r):
+        return await _reward_out(db, r)
+
+    return await page(db.rewards, q, limit, starting_after, shape)
+
+
+@router.get("/rewards/{reward_id}")
+async def get_reward(reward_id: str, m=Depends(managed_api), db=Depends(db_dep)):
+    r = await db.rewards.find_one({"_id": reward_id, "merchant_id": m["_id"]})
+    if not r:
+        raise HTTPException(404, "no such reward")
+    return await _reward_out(db, r)
+
+
+class FulfillIn(BaseModel):
+    note: str | None = Field(default=None, max_length=300, description="what you gave, e.g. a coupon id")
+
+
+@router.post("/rewards/{reward_id}/fulfill")
+async def fulfill_reward(reward_id: str, body: FulfillIn | None = None, m=Depends(managed_api), db=Depends(db_dep)):
+    """Record that you handed the reward out. Safe to repeat."""
+    try:
+        r = await rewards.fulfill(db, m["_id"], reward_id, body.note if body else None, by="api")
+    except rewards.RewardError as e:
+        raise HTTPException(e.status, str(e))
+    return await _reward_out(db, r)
 
 
 @router.get("/domains")

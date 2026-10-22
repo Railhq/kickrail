@@ -48,6 +48,8 @@ EVENT_TYPES = [
     "payout.paid",
     "payout.failed",
     "payout.undone",
+    "reward.earned",
+    "reward.fulfilled",
 ]
 
 # Minutes to wait after the Nth failure. After the last one the delivery is given up.

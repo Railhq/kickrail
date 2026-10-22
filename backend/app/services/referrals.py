@@ -24,7 +24,7 @@ from pymongo.errors import DuplicateKeyError
 from ..db import run_in_transaction
 from ..domain.fraud import canonical_email, self_referral_flags
 from ..ids import new_id
-from . import notify
+from . import notify, rewards
 
 log = logging.getLogger(__name__)
 
@@ -266,6 +266,7 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
     # A form the script picked up on its own may be a newsletter box, not a signup.
     if not inp.auto and not referral.get("test"):
         await award_lead_bounty(db, merchant, referral)
+        await rewards.on_signup(db, merchant, referral)
     return referral, True
 
 

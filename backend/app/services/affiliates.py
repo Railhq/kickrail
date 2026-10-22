@@ -10,7 +10,7 @@ from pymongo.errors import DuplicateKeyError
 
 from .. import plans
 from ..db import run_in_transaction
-from ..domain.commission import describe_rule
+from ..domain.commission import describe_rule, is_custom
 from ..ids import new_id, random_id, sha256, slugify
 from ..security import can_be_paid
 from ..serializers import affiliate_url, code_obj, link_obj, portal_base
@@ -252,6 +252,8 @@ async def affiliate_view(db: AsyncDatabase, m: dict, aff: dict, user: dict) -> d
         "has_tax_form": bool(user.get("tax_info")),
         "tax_form_required": m["settings"].get("require_tax_form", False),
         "fx": await fx.for_display(db, m["settings"].get("display_currency") or "usd"),
+        # "custom": the program rewards with something other than cash, so the portal shows rewards, not money.
+        "reward_mode": "custom" if is_custom(campaign) else "cash",
         **await pipeline(db, aff),
     }
 
@@ -292,5 +294,9 @@ async def pipeline(db, aff: dict) -> dict:
                 "void_reason": c.get("void_reason"),
             }
             for c in commissions[:200]
+        ],
+        "rewards": [
+            {"id": r["_id"], "description": r["description"], "status": r["status"], "held_for_review": bool(r.get("held")), "created_at": r["created_at"], "fulfilled_at": r.get("fulfilled_at")}
+            async for r in db.rewards.find({"affiliate_id": aff["_id"], "recipient": "affiliate", "status": {"$ne": "void"}}).sort("created_at", -1).limit(200)
         ],
     }

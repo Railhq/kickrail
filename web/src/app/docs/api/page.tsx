@@ -213,6 +213,36 @@ for await (const c of all("/commissions?status=pending")) console.log(c.id, c.am
         ]}
       />
 
+      <H2 id="rewards">Rewards</H2>
+      <P>
+        For campaigns whose reward isn&apos;t cash, such as a discount or a free month. Kickrail records each reward when it&apos;s earned and sends <C>reward.earned</C>; your app hands it out, then marks it fulfilled. A held reward (a possible self-referral) sends nothing until you approve its referral.
+      </P>
+      <Endpoint method="GET" path="/v1/rewards" plan={G} />
+      {LIST([
+        ["affiliate_id", "id", ""],
+        ["referral_id", "id", ""],
+        ["status", "earned | fulfilled | void", ""],
+        ["recipient", "affiliate | customer", ""],
+      ])}
+      <Endpoint method="GET" path="/v1/rewards/{id}" plan={G} />
+      <Endpoint method="POST" path="/v1/rewards/{id}/fulfill" plan={G} />
+      <P>Body (optional): <C>{`{"note": "applied coupon 50_off_forever"}`}</C>. Safe to repeat: a fulfilled reward comes back unchanged, and <C>reward.fulfilled</C> is sent once. Returns 409 for a held or void reward.</P>
+      <H3>The reward object</H3>
+      <Fields
+        rows={[
+          ["id", "string", <><C>rwd_...</C></>],
+          ["recipient", "affiliate | customer", "Who gets it: the affiliate who shared, or the customer they referred."],
+          ["description", "string", <>The campaign&apos;s wording at the time, for example <C>50% off forever</C>.</>],
+          ["trigger", "signup | first_payment | every_payment", "What earned it."],
+          ["status", "earned | fulfilled | void", "Void means its referral was rejected before it was handed out."],
+          ["held", "boolean", "Waiting on a self-referral review."],
+          ["affiliate_id, referral_id, campaign_id", "string", ""],
+          ["customer", "object", <>The referred customer: <C>email</C>, <C>user_id</C>, <C>stripe_customer_id</C>. Use it to find whom to apply a customer reward to.</>],
+          ["note, fulfilled_at", "string | null, time | null", "Set once fulfilled."],
+          ["created_at", "time", ""],
+        ]}
+      />
+
       <H2>Payouts</H2>
       <Endpoint method="GET" path="/v1/payouts" plan={G} />
       {LIST([])}

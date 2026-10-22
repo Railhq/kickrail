@@ -25,6 +25,8 @@ export function CampaignForm({ campaign, coupons, website }: { campaign?: Campai
   const [rule, setRule] = useState(campaign?.rule.type ?? "percent");
   const [mode, setMode] = useState(campaign?.duration.mode ?? "months");
   const [rows, setRows] = useState<Row[]>(campaign?.product_rules.map(toRow) ?? []);
+  const [kind, setKind] = useState<"cash" | "custom">(campaign?.reward?.type ?? "cash");
+  const reward = campaign?.reward;
   const set = (i: number, patch: Partial<Row>) => setRows(rows.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const r = campaign?.rule;
   const d = campaign?.duration;
@@ -32,6 +34,50 @@ export function CampaignForm({ campaign, coupons, website }: { campaign?: Campai
     <ActionForm action={saveCampaign} className="grid gap-4 sm:grid-cols-2">
       {campaign && <input type="hidden" name="id" value={campaign.id} />}
       <Field label="Name"><input className="input" name="name" defaultValue={campaign?.name ?? ""} placeholder="Creators" required /></Field>
+      <Field label="Reward" hint={kind === "custom" ? "Anything that isn't cash: a discount, a free month, swag. Kickrail records who earned it and sends a reward.earned webhook; you hand it out." : "A share of what referred customers pay, paid out in cash."}>
+        <select className="input" name="reward_type" value={kind} onChange={(e) => setKind(e.target.value as "cash" | "custom")}>
+          <option value="cash">Cash commission</option>
+          <option value="custom">Custom reward</option>
+        </select>
+      </Field>
+      {kind === "custom" ? (
+        <>
+          <div className="grid gap-4 rounded-lg border border-line bg-sunk/40 p-3 sm:col-span-2 sm:grid-cols-2">
+            <Field label="Affiliate gets"><input className="input" name="affiliate_reward" defaultValue={reward?.affiliate.description ?? ""} placeholder="50% off forever" maxLength={120} required /></Field>
+            <Field label="When">
+              <div className="flex gap-2">
+                <select className="input" name="affiliate_reward_on" defaultValue={reward?.affiliate.on ?? "first_payment"}>
+                  <option value="signup">A referral signs up</option>
+                  <option value="first_payment">A referral first pays</option>
+                  <option value="every_payment">Every payment from a referral</option>
+                </select>
+                <select className="input w-44" name="affiliate_reward_limit" defaultValue={reward?.affiliate.limit ?? "per_referral"} aria-label="How often">
+                  <option value="per_referral">Every time</option>
+                  <option value="once">Once per affiliate</option>
+                </select>
+              </div>
+            </Field>
+            <Field label="Referred customer gets" hint="Optional. Leave empty if only the affiliate is rewarded."><input className="input" name="customer_reward" defaultValue={reward?.customer?.description ?? ""} placeholder="25% off" maxLength={120} /></Field>
+            <Field label="When">
+              <select className="input" name="customer_reward_on" defaultValue={reward?.customer?.on ?? "signup"}>
+                <option value="signup">They sign up</option>
+                <option value="first_payment">They first pay</option>
+              </select>
+            </Field>
+          </div>
+          {/* The cash settings are kept as they were, for switching back. */}
+          <input type="hidden" name="rule_type" value={r?.type ?? "percent"} />
+          <input type="hidden" name="percent" value={r?.type === "percent" ? r.bps / 100 : 30} />
+          <input type="hidden" name="flat" value={r?.type === "flat" ? r.cents / 100 : ""} />
+          <input type="hidden" name="currency" value={r?.type === "flat" ? r.currency : "usd"} />
+          <input type="hidden" name="duration_mode" value={d?.mode ?? "months"} />
+          <input type="hidden" name="months" value={d?.mode === "months" ? d.months : 12} />
+          <input type="hidden" name="hold_days" value={campaign?.hold_days ?? 30} />
+          <input type="hidden" name="min_payout" value={campaign ? campaign.min_payout_cents / 100 : 50} />
+          <input type="hidden" name="product_rules" value={JSON.stringify(rows)} />
+        </>
+      ) : (
+      <>
       <Field label="Commission">
         <div className="flex gap-2">
           <select className="input w-32" name="rule_type" value={rule} onChange={(e) => setRule(e.target.value as "percent" | "flat")}>
@@ -67,18 +113,22 @@ export function CampaignForm({ campaign, coupons, website }: { campaign?: Campai
       <Field label="Minimum payout" hint="Affiliates below this carry their balance to the next payout.">
         <input className="input" name="min_payout" type="number" min="0" step="0.01" defaultValue={campaign ? campaign.min_payout_cents / 100 : 50} />
       </Field>
+      </>
+      )}
       <Field label="Creator-code coupon" hint={coupons ? "Each affiliate's code becomes a Stripe promotion code for this coupon, so customers can type it at checkout." : "Connect Stripe to turn affiliate codes into checkout promotion codes."}>
         <select className="input" name="stripe_coupon_id" defaultValue={campaign?.stripe_coupon_id ?? ""} disabled={!coupons}>
           <option value="">No discount (codes are tracking only)</option>
           {coupons?.map((c) => <option key={c.id} value={c.id}>{couponLabel(c)}</option>)}
         </select>
       </Field>
-      <Field label="Signup bounty" hint="A flat amount for every referred signup, paid or not. Leave empty for none.">
-        <div className="flex gap-2">
-          <input className="input flex-1" name="lead_bounty" type="number" step="0.01" min="0" placeholder="0.00" defaultValue={campaign?.lead_bounty ? campaign.lead_bounty.cents / 100 : ""} />
-          <input className="input w-20 uppercase" name="lead_bounty_currency" defaultValue={campaign?.lead_bounty?.currency ?? "usd"} maxLength={3} />
-        </div>
-      </Field>
+      {kind === "cash" && (
+        <Field label="Signup bounty" hint="A flat amount for every referred signup, paid or not. Leave empty for none.">
+          <div className="flex gap-2">
+            <input className="input flex-1" name="lead_bounty" type="number" step="0.01" min="0" placeholder="0.00" defaultValue={campaign?.lead_bounty ? campaign.lead_bounty.cents / 100 : ""} />
+            <input className="input w-20 uppercase" name="lead_bounty_currency" defaultValue={campaign?.lead_bounty?.currency ?? "usd"} maxLength={3} />
+          </div>
+        </Field>
+      )}
       <div className="rounded-lg border border-line bg-sunk/40 p-3 sm:col-span-2">
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" name="public" className="mt-1" checked={isPublic} onChange={(e) => setPublic(e.target.checked)} />
@@ -103,7 +153,7 @@ export function CampaignForm({ campaign, coupons, website }: { campaign?: Campai
       <Field label="Landing page" hint={`Where this campaign's affiliate links send people. Leave empty for ${website}. Must be on the same site.`}>
         <input className="input" name="landing_url" type="url" defaultValue={campaign?.landing_url ?? ""} placeholder={`${website}/partners`} />
       </Field>
-      <div className="sm:col-span-2">
+      {kind === "cash" && <div className="sm:col-span-2">
         <p className="text-sm font-medium">Product rules</p>
         <p className="mt-0.5 text-xs text-muted">Pay a different rate on specific Stripe products or prices. A matching rule beats the campaign rate and any per-affiliate rate. Lines without a match use the rate above.</p>
         <input type="hidden" name="product_rules" value={JSON.stringify(rows)} />
@@ -135,7 +185,7 @@ export function CampaignForm({ campaign, coupons, website }: { campaign?: Campai
         <button type="button" className="btn btn-secondary mt-2" onClick={() => setRows([...rows, { match: "product", id: "", label: "", type: "percent", percent: "20", flat: "", currency: "usd" }])}>
           Add product rule
         </button>
-      </div>
+      </div>}
       <div className="sm:col-span-2"><Submit>{campaign ? "Save changes" : "Create campaign"}</Submit></div>
     </ActionForm>
   );

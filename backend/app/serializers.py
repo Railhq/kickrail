@@ -85,6 +85,27 @@ def referral_obj(r: dict) -> dict:
     }
 
 
+def reward_obj(r: dict, referral: dict | None = None) -> dict:
+    """referral: so a handler knows who to give it to without another call."""
+    referral = referral or {}
+    return {
+        "id": r["_id"],
+        "object": "reward",
+        "recipient": r["recipient"],
+        "description": r["description"],
+        "trigger": r["trigger"],
+        "status": r["status"],
+        "held": bool(r.get("held")),
+        "affiliate_id": r["affiliate_id"],
+        "referral_id": r["referral_id"],
+        "campaign_id": r["campaign_id"],
+        "customer": {"email": referral.get("email"), "user_id": referral.get("external_user_id"), "stripe_customer_id": referral.get("stripe_customer_id")},
+        "note": r.get("note"),
+        "fulfilled_at": r.get("fulfilled_at"),
+        "created_at": r["created_at"],
+    }
+
+
 def commission_obj(c: dict) -> dict:
     kind = "lead" if c.get("kind") == "lead" else "clawback" if c.get("clawback_of") else "sale"
     return {
