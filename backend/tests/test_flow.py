@@ -479,3 +479,18 @@ async def test_deleting_commissions_and_referrals_is_audited(client, db, fakes):
     assert fakes["merchant"].customer_metadata["cus_del"]["kickrail_referral"] == ""
     # Another merchant's id, or one already gone, is a 404.
     assert (await client.delete(f"/merchant/referrals/{rid}", headers=auth(S["owner"]))).status_code == 404
+
+
+async def test_display_currency_rates(client, db):
+    h = auth(S["owner"])
+    f = (await client.get("/merchant/fx", headers=h)).json()
+    assert f["currency"] == "usd" and f["date"] == "2026-10-21" and f["per_unit"]["usd"] == 1
+    assert round(f["per_unit"]["inr"] * 10613, 2) == 112.34  # ₹10,613 is US$112.34 at these rates
+    assert (await client.get("/merchant/overview", headers=h)).json()["fx"] == f
+    assert (await client.patch("/merchant", json={"display_currency": "XYZ"}, headers=h)).status_code == 422
+    m = (await client.patch("/merchant", json={"display_currency": "CAD"}, headers=h)).json()
+    assert m["settings"]["display_currency"] == "cad"
+    assert round((await client.get("/merchant/fx", headers=h)).json()["per_unit"]["usd"], 4) == round(1.578 / 1.1234, 4)
+    # Fetched once a day; rates stay in Mongo for when the source is down.
+    assert await db.fx_rates.count_documents({}) == 1
+    await client.patch("/merchant", json={"display_currency": "usd"}, headers=h)

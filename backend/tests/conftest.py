@@ -143,6 +143,12 @@ async def setup_app(fakes):
     import app.routers.webhooks as wh
 
     wh.platform_api = lambda: fakes["platform"]
+    from app.services import fx
+
+    async def fake_rates():
+        return {"date": "2026-10-21", "rates": {"eur": 1.0, "usd": 1.1234, "inr": 106.13, "cad": 1.578}}
+
+    fx.fetch = fake_rates
     db = await get_db()
     yield
     await db.client.drop_database(db.name)

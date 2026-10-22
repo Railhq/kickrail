@@ -2,13 +2,13 @@ import Link from "next/link";
 import { Card, Notice, Stat, StatGroup } from "@/components/ui";
 import { CopyButton } from "@/components/CopyButton";
 import { api, siteUrl } from "@/lib/backend";
-import { mainCurrency, splitMoney } from "@/lib/format";
+import { displayMoney, type Fx, fxNote } from "@/lib/format";
 import type { Merchant } from "@/lib/types";
 
 type Overview = {
   affiliates: number; pending_affiliates: number; clicks: number; leads: number; customers: number; flagged: number;
   referred_revenue: Record<string, number>; commissions: Record<string, Record<string, number>>;
-  stripe_connected: boolean; installed: boolean;
+  stripe_connected: boolean; installed: boolean; fx: Fx;
 };
 
 export const metadata = { title: "Overview" };
@@ -27,8 +27,7 @@ export default async function OverviewPage() {
     { label: "Paying customers", value: o.customers },
   ];
   const rate = (a: number, b: number) => (a ? `${((b / a) * 100).toFixed(b / a < 0.1 ? 1 : 0)}%` : "n/a");
-  const cur = mainCurrency(o.referred_revenue, o.commissions.pending, o.commissions.paid);
-  const [revenue, owed, paid] = [o.referred_revenue, o.commissions.pending, o.commissions.paid].map((m) => splitMoney(m, cur));
+  const [revenue, owed, paid] = [o.referred_revenue, o.commissions.pending, o.commissions.paid].map((m) => displayMoney(m, o.fx));
   const done = steps.filter((s) => s.done).length;
   return (
     <div className="space-y-8">
@@ -76,6 +75,7 @@ export default async function OverviewPage() {
           <Stat big label="Commissions owed" value={owed.main} sub={owed.rest} hint={<Link className="link" href="/dashboard/payouts">Pay affiliates →</Link>} />
           <Stat big label="Commissions paid" value={paid.main} sub={paid.rest} hint="All time" />
         </StatGroup>
+        {[revenue, owed, paid].some((b) => b.main.startsWith("≈") || b.rest?.startsWith("≈")) && <p className="mt-2 text-xs text-muted">{fxNote(o.fx)}</p>}
       </section>
 
       <section>

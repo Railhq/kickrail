@@ -3,19 +3,15 @@ import { addAffiliate, setAffiliateStatus, updateAffiliate } from "@/app/actions
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { Badge, Card, Empty, Field, StatusBadge, Table } from "@/components/ui";
 import { api } from "@/lib/backend";
-import { date, money } from "@/lib/format";
+import { date, displayMoney, type Fx, fxNote } from "@/lib/format";
 import type { Affiliate, Campaign } from "@/lib/types";
 
 export const metadata = { title: "Affiliates" };
 
-/** Currencies this affiliate earned in, US dollars first, then largest. Each gets its own line; they can't be added up. */
-const currencies = (m: Record<string, number>) =>
-  Object.keys(m)
-    .filter((c) => m[c] !== 0)
-    .sort((x, y) => (x === "usd" ? -1 : y === "usd" ? 1 : m[y] - m[x]));
 
 export default async function AffiliatesPage() {
-  const [affs, campaigns] = await Promise.all([api<Affiliate[]>("/merchant/affiliates"), api<Campaign[]>("/merchant/campaigns")]);
+  const [affs, campaigns, fx] = await Promise.all([api<Affiliate[]>("/merchant/affiliates"), api<Campaign[]>("/merchant/campaigns"), api<Fx>("/merchant/fx")]);
+  const mixed = affs.some((a) => Object.values(a.earned).filter(Boolean).length > 1 || displayMoney(a.earned, fx).rest);
   const campaignName = Object.fromEntries(campaigns.map((c) => [c.id, c.name]));
   return (
     <div className="space-y-6">
@@ -80,13 +76,16 @@ export default async function AffiliatesPage() {
                 <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.leads}</td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.customers}</td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5 num">
-                  {currencies(a.earned).length === 0 && money(0)}
-                  {currencies(a.earned).map((cur) => (
-                    <div key={cur} className="whitespace-nowrap [&+&]:mt-1.5">
-                      {money(a.earned[cur], cur)}
-                      <p className="text-xs text-muted">{money(a.paid[cur] ?? 0, cur)} paid</p>
-                    </div>
-                  ))}
+                  {(() => {
+                    const [earned, paid] = [displayMoney(a.earned, fx), displayMoney(a.paid, fx)];
+                    return (
+                      <div className="whitespace-nowrap">
+                        {earned.main}
+                        {earned.rest && <p className="text-xs text-muted">{earned.rest}</p>}
+                        <p className="mt-1 text-xs text-muted">{paid.main} paid</p>
+                      </div>
+                    );
+                  })()}
                 </td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5">
                   <div className="flex w-24 flex-col items-stretch gap-1.5">
@@ -115,6 +114,7 @@ export default async function AffiliatesPage() {
           </Table>
         )}
       </Card>
+      {mixed && <p className="text-xs text-muted">{fxNote(fx)}</p>}
     </div>
   );
 }

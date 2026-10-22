@@ -14,7 +14,7 @@ from ..domain.commission import describe_rule
 from ..ids import new_id, random_id, sha256, slugify
 from ..security import can_be_paid
 from ..serializers import affiliate_url, code_obj, link_obj, portal_base
-from . import notify
+from . import fx, notify
 from .referrals import code_taken, token_taken
 
 TOKEN = re.compile(r"^[a-z0-9_-]{3,32}$")
@@ -251,6 +251,7 @@ async def affiliate_view(db: AsyncDatabase, m: dict, aff: dict, user: dict) -> d
         "can_be_paid": can_be_paid(user),
         "has_tax_form": bool(user.get("tax_info")),
         "tax_form_required": m["settings"].get("require_tax_form", False),
+        "fx": await fx.for_display(db, m["settings"].get("display_currency") or "usd"),
         **await pipeline(db, aff),
     }
 

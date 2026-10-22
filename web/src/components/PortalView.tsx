@@ -3,7 +3,7 @@ import { addOwnLink, changeToken, deleteOwnLink } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge, Card, Empty, Notice, Stat, StatGroup, StatusBadge, Table } from "@/components/ui";
-import { date, mainCurrency, money, relative, splitMoney } from "@/lib/format";
+import { date, displayMoney, fxNote, money, relative } from "@/lib/format";
 import type { PortalView as View } from "@/lib/types";
 
 /**
@@ -12,8 +12,7 @@ import type { PortalView as View } from "@/lib/types";
  */
 export function PortalView({ d, preview = false, back }: { d: View; preview?: boolean; back?: React.ReactNode }) {
   const pick = (k: "in_hold" | "payable" | "paid") => Object.fromEntries(Object.entries(d.totals).map(([c, v]) => [c, v[k]]));
-  const cur = mainCurrency(pick("in_hold"), pick("payable"), pick("paid"));
-  const bal = { in_hold: splitMoney(pick("in_hold"), cur), payable: splitMoney(pick("payable"), cur), paid: splitMoney(pick("paid"), cur) };
+  const bal = { in_hold: displayMoney(pick("in_hold"), d.fx), payable: displayMoney(pick("payable"), d.fx), paid: displayMoney(pick("paid"), d.fx) };
   const nextRelease = d.commissions.filter((c) => c.status === "pending" && !c.held_for_review && new Date(c.due_at) > new Date()).map((c) => c.due_at).sort()[0];
   const b = d.program.branding ?? {};
   const accent = b.color ?? undefined;
@@ -139,6 +138,7 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
           <p className="mt-2 text-xs text-ink-muted">all time</p>
         </div>
       </section>
+      {[bal.in_hold, bal.payable, bal.paid].some((b) => b.main.startsWith("≈") || b.rest?.startsWith("≈")) && <p className="-mt-3 text-xs text-muted">{fxNote(d.fx)}</p>}
       {!d.can_be_paid && (
         <p className="-mt-3 text-sm text-muted">
           {preview ? "No payout details saved yet." : <>Tell programs where to send your money: <Link className="link" href="/a/payouts">payout details →</Link></>}

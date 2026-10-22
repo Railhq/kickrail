@@ -22,7 +22,7 @@ from ..domain.commission import describe_rate, describe_rule
 from ..ids import new_id, random_id, sha256, slugify
 from ..security import MAX_PROGRAMS, can_be_paid, current_merchant, current_user, db_dep
 from ..serializers import affiliate_url, code_obj, join_url, link_obj, portal_base
-from ..services import audit, notify
+from ..services import audit, fx, notify
 from ..services import payouts as payout_svc
 from ..services import deletion, rewardful_import, stripe_sync
 from ..services.exports import EXPORTS
@@ -41,7 +41,7 @@ def out(doc: dict | None, *drop: str) -> dict | None:
     return d
 
 
-DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False, "attribution": "first"}
+DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False, "attribution": "first", "display_currency": "usd"}
 
 
 def plan_summary(m: dict, plan: dict | None = None) -> dict:
@@ -159,6 +159,7 @@ class SettingsIn(BaseModel):
     require_tax_form: bool | None = None
     attribution: Literal["first", "last"] | None = None
     emails: dict[str, bool] | None = None
+    display_currency: str | None = None
 
 
 @router.patch("")
@@ -171,6 +172,10 @@ async def update_merchant(body: SettingsIn, m=Depends(current_merchant), db=Depe
     for k in ("cookie_days", "auto_approve", "affiliate_links", "require_tax_form", "attribution"):
         if getattr(body, k) is not None:
             s[f"settings.{k}"] = getattr(body, k)
+    if body.display_currency is not None:
+        if body.display_currency.lower() not in fx.DISPLAY_CURRENCIES:
+            raise HTTPException(422, f"unsupported display currency: {body.display_currency}")
+        s["settings.display_currency"] = body.display_currency.lower()
     for k, on in (body.emails or {}).items():
         if k not in EMAIL_KINDS:
             raise HTTPException(422, f"unknown email: {k}")
@@ -1024,7 +1029,18 @@ async def overview(m=Depends(current_merchant), db=Depends(db_dep)):
         "stripe_connected": bool(m.get("stripe")),
         "installed": await db.clicks.count_documents({"merchant_id": mid}) > 0,
         "plan": plan_summary(m),
+        "fx": await display_fx(db, m),
     }
+
+
+async def display_fx(db, m: dict) -> dict | None:
+    return await fx.for_display(db, (m["settings"].get("display_currency") or "usd"))
+
+
+@router.get("/fx")
+async def exchange_rates(m=Depends(current_merchant), db=Depends(db_dep)):
+    """Today's rates into the program's display currency, for approximate totals. Null when unavailable."""
+    return await display_fx(db, m)
 
 
 @router.get("/audit")

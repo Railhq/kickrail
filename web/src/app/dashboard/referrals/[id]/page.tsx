@@ -4,8 +4,8 @@ import { reviewReferral } from "@/app/actions";
 import { CommissionTable } from "@/components/CommissionTable";
 import { DeleteButton } from "@/components/DeleteButton";
 import { Badge, Card, Empty, Notice, Stat, StatGroup, StatusBadge } from "@/components/ui";
-import { authed } from "@/lib/backend";
-import { date, mainCurrency, referralSource, referralWho, splitMoney } from "@/lib/format";
+import { api, authed } from "@/lib/backend";
+import { date, displayMoney, type Fx, fxNote, referralSource, referralWho } from "@/lib/format";
 import type { Commission, ReferralDetail } from "@/lib/types";
 
 export const metadata = { title: "Referral" };
@@ -27,14 +27,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export default async function ReferralPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const r = await authed<ReferralDetail>(`/merchant/referrals/${id}`, `/dashboard/referrals/${id}`);
+  const [r, fx] = await Promise.all([authed<ReferralDetail>(`/merchant/referrals/${id}`, `/dashboard/referrals/${id}`), api<Fx>("/merchant/fx")]);
   if (!r) notFound();
   const live = r.commissions.filter((c) => c.status !== "void");
   const revenue = sum(live, (c) => Math.max(c.base_cents, 0));
   const earned = sum(live, (c) => c.amount_cents);
   const paid = sum(live.filter((c) => c.status === "paid"), (c) => c.amount_cents);
-  const cur = mainCurrency(revenue, earned, paid);
-  const [rev, ear, pd] = [revenue, earned, paid].map((m) => splitMoney(m, cur));
+  const [rev, ear, pd] = [revenue, earned, paid].map((m) => displayMoney(m, fx));
   const open = r.flags.length > 0 && !r.flags_cleared;
   const name = referralWho(r);
   const locked = r.commissions.some((c) => c.status === "paid" || c.payout_id);
@@ -72,6 +71,7 @@ export default async function ReferralPage({ params }: { params: Promise<{ id: s
         <Stat big label="Commission earned" value={ear.main} sub={ear.rest} hint={`${live.length} commission${live.length === 1 ? "" : "s"}, after refunds`} />
         <Stat big label="Paid to affiliate" value={pd.main} sub={pd.rest} hint="So far" />
       </StatGroup>
+      {[rev, ear, pd].some((b) => b.main.startsWith("≈") || b.rest?.startsWith("≈")) && <p className="-mt-6 text-xs text-muted">{fxNote(fx)}</p>}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card title="Customer">

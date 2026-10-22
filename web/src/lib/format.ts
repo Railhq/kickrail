@@ -1,5 +1,9 @@
+// Stripe amounts for these are whole units, not hundredths.
+const ZERO_DECIMAL = new Set(["bif", "clp", "djf", "gnf", "jpy", "kmf", "krw", "mga", "pyg", "rwf", "ugx", "vnd", "vuv", "xaf", "xof", "xpf"]);
+const unit = (c: string) => (ZERO_DECIMAL.has(c.toLowerCase()) ? 1 : 100);
+
 export function money(cents: number, currency = "usd") {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: currency.toUpperCase() }).format(cents / 100);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: currency.toUpperCase() }).format(cents / unit(currency));
 }
 
 /** {usd: 1200, eur: 300} -> "$12.00 · €3.00" */
@@ -24,6 +28,35 @@ export function splitMoney(m: Record<string, number> | undefined, main: string) 
     .map(([c, v]) => money(v, c));
   const rest = others.length ? `plus ${others.length > 1 ? `${others.slice(0, -1).join(", ")} and ${others.at(-1)}` : others[0]}` : null;
   return { main: money(m?.[main] ?? 0, main), rest };
+}
+
+/** Today's rates into the program's display currency; per_unit[c] is one unit of c in that currency. */
+export type Fx = { currency: string; date: string; per_unit: Record<string, number> } | null | undefined;
+
+/**
+ * One headline for amounts that may be in several currencies, the way Rewardful shows them.
+ * One currency: the exact amount (with "≈" the display currency under it if different).
+ * Several: "≈" their total in the display currency, with the exact amounts under it.
+ * Without rates it falls back to splitMoney. Stored amounts are never converted.
+ */
+export function displayMoney(m: Record<string, number> | undefined, fx: Fx) {
+  const entries = Object.entries(m ?? {}).filter(([, v]) => v !== 0);
+  const to = fx?.currency ?? "usd";
+  if (entries.length === 0) return { main: money(0, to), rest: null };
+  const convertible = fx && entries.every(([c]) => fx.per_unit[c]);
+  const approx = () => `≈ ${money(Math.round(entries.reduce((t, [c, v]) => t + (v / unit(c)) * fx!.per_unit[c], 0) * unit(to)), to)}`;
+  if (entries.length === 1) {
+    const [c, v] = entries[0];
+    return { main: money(v, c), rest: convertible && c !== to ? approx() : null };
+  }
+  if (!convertible) return splitMoney(m, mainCurrency(m));
+  const exact = entries.sort(([a, x], [b, y]) => (a === to ? -1 : b === to ? 1 : y - x)).map(([c, v]) => money(v, c));
+  return { main: approx(), rest: exact.join(" + ") };
+}
+
+/** Footnote for a page that shows converted totals. */
+export function fxNote(fx: Fx) {
+  return fx ? `≈ totals use the ECB reference rate for ${date(fx.date)}. Commissions and payouts stay in the currency the customer paid in.` : null;
 }
 
 export function date(iso?: string | null) {
