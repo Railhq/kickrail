@@ -148,6 +148,8 @@ export type ReferralDetail = Referral & {
   affiliate: { id: string; name: string; email: string; token: string };
   campaign: { id: string; name: string } | null;
   click: { token: string; landing_url: string; referrer: string; created_at: string } | null;
+  // The link token or creator code that brought them in; url for links imported from Rewardful.
+  via?: { token?: string; code?: string; url?: string };
   commissions: Commission[];
 };
 

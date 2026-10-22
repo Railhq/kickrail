@@ -9,7 +9,7 @@ import pytest
 from app import deps
 from app.main import app
 from app.services.payouts import payable
-from app.services.rewardful_import import RewardfulError, RewardfulNotFound
+from app.services.rewardful_import import RewardfulError, RewardfulNotFound, backfill_links
 
 
 def auth(token):
@@ -47,7 +47,7 @@ for n in range(5, 130):  # more than one page
 
 REFERRALS = [
     {"id": "r-1", "affiliate": {"id": "a-1"}, "customer": {"id": "cus_fred", "email": "Fred@buyer.example"}, "stripe_customer_id": "cus_fred", "conversion_state": "conversion",
-     "created_at": "2025-03-01T00:00:00.000Z", "became_conversion_at": "2025-03-02T00:00:00.000Z"},
+     "link": {"id": "l-1", "url": "https://rwco.example/?via=ann", "token": "ann"}, "created_at": "2025-03-01T00:00:00.000Z", "became_conversion_at": "2025-03-02T00:00:00.000Z"},
     {"id": "r-2", "affiliate": {"id": "a-2"}, "customer": {"email": "lead@buyer.example"}, "conversion_state": "lead", "created_at": "2025-03-05T00:00:00.000Z"},
     {"id": "r-3", "affiliate": {"id": "a-1"}, "customer": {"id": "cus_known", "email": "known@buyer.example"}, "stripe_customer_id": "cus_known", "conversion_state": "conversion"},
 ]
@@ -177,6 +177,8 @@ async def test_import_from_rewardful(client, db, rewardful):
 
     fred = await db.referrals.find_one({"merchant_id": mid, "rewardful_id": "r-1"})
     assert fred["stripe_customer_id"] == "cus_fred" and fred["email"] == "fred@buyer.example" and fred["status"] == "customer" and fred["first_paid_at"]
+    assert fred["via"] == {"token": "ann", "url": "https://rwco.example/?via=ann"}
+    assert "via" not in await db.referrals.find_one({"merchant_id": mid, "rewardful_id": "r-2"})
     assert (await db.referrals.find_one({"merchant_id": mid, "rewardful_id": "r-2"}))["status"] == "lead"
     assert await db.referrals.count_documents({"merchant_id": mid, "stripe_customer_id": "cus_known"}) == 1
 
@@ -244,6 +246,30 @@ async def test_import_only_some_affiliates(client, db, rewardful):
     assert imp["status"] == "failed" and "None of the affiliates" in imp["error"]
     r = await client.post("/merchant/import/rewardful", json={"api_secret": "sk_live_rewardful_1", "only": ["x"] * 101}, headers=h)
     assert r.status_code == 422
+
+
+async def test_backfill_links_touches_only_the_link(client, db, rewardful):
+    h = auth(await signup(client, db, "owner4@rwco.example", "Ren"))
+    mid = (await client.post("/merchant", json={"name": "Older", "website": "https://rwco.example"}, headers=h)).json()["merchant"]["id"]
+    await db.merchants.update_one({"_id": mid}, {"$set": {"plan": {"id": "growth"}}})
+    await client.post("/merchant/import/rewardful", json={"api_secret": "sk_live_rewardful_1", "only": ["a-1", "a-2"]}, headers=h)
+    assert (await wait(client, h))["status"] == "done"
+    # As an import from before links were kept left it.
+    await db.referrals.update_many({"merchant_id": mid}, {"$unset": {"via": ""}})
+    before = {c: await db[c].find({"merchant_id": mid}).to_list(None) for c in ("referrals", "commissions", "payouts", "affiliates")}
+
+    FakeRewardful.calls.clear()
+    counts = await backfill_links(db, mid, FakeRewardful("sk_live_rewardful_1"))
+    assert counts == {"affiliates": 2, "seen": 3, "updated": 1}
+    assert {p for p, _ in FakeRewardful.calls} == {"/referrals"}
+    after = {c: await db[c].find({"merchant_id": mid}).to_list(None) for c in before}
+    for c in ("commissions", "payouts", "affiliates"):
+        assert after[c] == before[c]
+    fred = next(r for r in after["referrals"] if r["rewardful_id"] == "r-1")
+    assert fred.pop("via") == {"token": "ann", "url": "https://rwco.example/?via=ann"}
+    assert after["referrals"] == before["referrals"]
+    # Running it again changes nothing.
+    assert (await backfill_links(db, mid, FakeRewardful("sk_live_rewardful_1")))["updated"] == 0
 
 
 async def test_exports(client, db, rewardful):

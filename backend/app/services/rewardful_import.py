@@ -424,6 +424,7 @@ class Run:
                     "first_paid_at": _time(r.get("became_conversion_at")) if converted else None,
                     **({"email": email} if email else {}),
                     **({"stripe_customer_id": cus} if cus else {}),
+                    **({"via": via} if (via := rewardful_via(r)) else {}),
                 }
                 if existing:
                     try:
@@ -573,6 +574,33 @@ def import_out(doc: dict | None) -> dict | None:
         "started_at": doc["started_at"],
         "finished_at": doc.get("finished_at"),
     }
+
+
+def rewardful_via(r: dict) -> dict | None:
+    """The affiliate link a Rewardful referral came through: its token and full URL."""
+    link = r.get("link") or {}
+    token = (link.get("token") or "").strip().lower()
+    return {"token": token, **({"url": link["url"]} if link.get("url") else {})} if token else None
+
+
+async def backfill_links(db: AsyncDatabase, merchant_id: str, api: "Rewardful") -> dict:
+    """Adds the Rewardful link to referrals imported before the import kept it.
+
+    Reads each imported affiliate's referrals from Rewardful and sets `via` on the matching
+    Kickrail referral when it has none. Nothing else is written: no commissions, payouts,
+    statuses or emails, so it's safe to run while Stripe is connected."""
+    counts = {"affiliates": 0, "seen": 0, "updated": 0}
+    params = [("conversion_state[]", "lead"), ("conversion_state[]", "conversion")]
+    async with api:
+        async for a in db.affiliates.find({"merchant_id": merchant_id, "rewardful_id": {"$exists": True}}, {"rewardful_id": 1}):
+            counts["affiliates"] += 1
+            async for rows, _ in api.pages("/referrals", [*params, ("affiliate_id", a["rewardful_id"])]):
+                for r in rows:
+                    counts["seen"] += 1
+                    if via := rewardful_via(r):
+                        res = await db.referrals.update_one({"merchant_id": merchant_id, "rewardful_id": r["id"], "via": {"$exists": False}}, {"$set": {"via": via}})
+                        counts["updated"] += res.modified_count
+    return counts
 
 
 async def running_import(db: AsyncDatabase, merchant_id: str) -> dict | None:

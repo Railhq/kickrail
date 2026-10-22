@@ -885,7 +885,7 @@ async def list_referrals(
         query["status"] = status
     if q.strip():
         rx = {"$regex": re.escape(q.strip()), "$options": "i"}
-        query["$or"] = [{"email": rx}, {"stripe_customer_id": rx}, {"external_user_id": rx}, {"affiliate_id": {"$in": await _matching_affiliates(db, m["_id"], rx)}}]
+        query["$or"] = [{"email": rx}, {"stripe_customer_id": rx}, {"external_user_id": rx}, {"via.token": rx}, {"via.code": rx}, {"affiliate_id": {"$in": await _matching_affiliates(db, m["_id"], rx)}}]
     refs, total = await _page(db.referrals, query, page)
     names = await _affiliate_names(db, m["_id"])
     return {"items": [{**out(r), "affiliate_name": names.get(r["affiliate_id"], "")} for r in refs], "total": total, "page": page, "page_size": PAGE_SIZE}

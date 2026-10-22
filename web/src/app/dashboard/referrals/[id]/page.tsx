@@ -36,6 +36,7 @@ export default async function ReferralPage({ params }: { params: Promise<{ id: s
   const [rev, ear, pd] = [revenue, earned, paid].map((m) => displayMoney(m, fx));
   const open = r.flags.length > 0 && !r.flags_cleared;
   const name = referralWho(r);
+  const via = r.via?.code || r.via?.token || r.click?.token;
   const locked = r.commissions.some((c) => c.status === "paid" || c.payout_id);
 
   return (
@@ -92,7 +93,8 @@ export default async function ReferralPage({ params }: { params: Promise<{ id: s
               {r.affiliate.name && <p className="text-xs text-muted">{r.affiliate.email}</p>}
             </Row>
             {r.campaign && <Row label="Campaign">{r.campaign.name}</Row>}
-            <Row label="How">{referralSource(r.source)}{r.click?.token && <> · <span className="font-mono text-xs">{r.click.token}</span></>}</Row>
+            <Row label="How">{referralSource(r.source)}{via && <> · <span className="font-mono text-xs">{via}</span></>}</Row>
+            {r.via?.url && <Row label="Link"><span className="font-mono text-xs">{r.via.url}</span></Row>}
             {r.click ? (
               <>
                 <Row label="Clicked">{date(r.click.created_at)}</Row>
@@ -100,7 +102,7 @@ export default async function ReferralPage({ params }: { params: Promise<{ id: s
                 <Row label="Came from">{r.click.referrer ? <span className="font-mono text-xs">{r.click.referrer}</span> : <span className="text-muted">direct or hidden by the browser</span>}</Row>
               </>
             ) : r.source === "rewardful" ? (
-              <Row label="Click"><span className="text-muted">Rewardful doesn&apos;t export click details.</span></Row>
+              <Row label="Click"><span className="text-muted">Rewardful doesn&apos;t export when they clicked, where they landed or where they came from.</span></Row>
             ) : null}
           </dl>
         </Card>

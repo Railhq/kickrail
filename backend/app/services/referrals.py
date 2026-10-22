@@ -70,28 +70,40 @@ async def code_taken(db: AsyncDatabase, merchant_id: str, code: str) -> bool:
     return bool(await db.affiliates.find_one({"merchant_id": merchant_id, "code": code}) or await db.affiliate_codes.find_one({"merchant_id": merchant_id, "code": code}))
 
 
-async def resolve_affiliate(db: AsyncDatabase, merchant_id: str, inp: AttachInput) -> tuple[dict, str, str | None] | None:
+async def _promotion_code_name(db: AsyncDatabase, aff: dict, promotion_code_id: str) -> str | None:
+    """The code a customer typed at checkout, from the Stripe promotion code it maps to."""
+    match = {"$or": [{"stripe_promotion_code_id": promotion_code_id}, {"stripe_retired_promotion_code_ids": promotion_code_id}]}
+    if await db.affiliates.find_one({"_id": aff["_id"], **match}, {"_id": 1}):
+        return aff.get("code")
+    row = await db.affiliate_codes.find_one({"affiliate_id": aff["_id"], **match}, {"code": 1})
+    return row and row["code"]
+
+
+async def resolve_affiliate(db: AsyncDatabase, merchant_id: str, inp: AttachInput) -> tuple[dict, str, str | None, dict | None] | None:
+    """(affiliate, source, click id, via). `via` names the link token or creator code that
+    brought the person in, since an affiliate can have several of each."""
     approved = {"merchant_id": merchant_id, "status": "approved"}
     if inp.click_id:
         click = await db.clicks.find_one({"_id": inp.click_id, "merchant_id": merchant_id})
         if click:
             aff = await db.affiliates.find_one({**approved, "_id": click["affiliate_id"]})
             if aff:
-                return aff, "link", click["_id"]
+                return aff, "link", click["_id"], {"token": click["token"]} if click.get("token") else None
     if inp.token:
         aff = await affiliate_by_token(db, merchant_id, inp.token)
         if aff:
-            return aff, "link", None
+            return aff, "link", None, {"token": inp.token.strip().lower()}
     if inp.promotion_code_id:
         aff = await _by_field(db, merchant_id, "stripe_promotion_code_id", inp.promotion_code_id, db.affiliate_codes, True) or await _by_field(
             db, merchant_id, "stripe_retired_promotion_code_ids", inp.promotion_code_id, db.affiliate_codes, True
         )
         if aff:
-            return aff, "code", None
+            code = await _promotion_code_name(db, aff, inp.promotion_code_id)
+            return aff, "code", None, {"code": code} if code else None
     if inp.code:
         aff = await affiliate_by_code(db, merchant_id, inp.code)
         if aff:
-            return aff, "code", None
+            return aff, "code", None, {"code": inp.code.strip().upper()}
     return None
 
 
@@ -144,7 +156,7 @@ async def _last_touch(db: AsyncDatabase, merchant: dict, existing: dict, inp: At
     hit = await resolve_affiliate(db, merchant["_id"], inp)
     if not hit or hit[0]["_id"] == existing["affiliate_id"]:
         return {}
-    affiliate, source, click_id = hit
+    affiliate, source, click_id, via = hit
     click = await db.clicks.find_one({"_id": click_id}, {"test": 1}) if click_id else None
     # A test click never takes a real referral.
     if click and click.get("test") and not existing.get("test"):
@@ -157,6 +169,7 @@ async def _last_touch(db: AsyncDatabase, merchant: dict, existing: dict, inp: At
         "campaign_id": affiliate["campaign_id"],
         "click_id": click_id,
         "source": source,
+        "via": via,
         "flags": flags,
         "flags_cleared": False,
         "test": bool(click and click.get("test")),
@@ -210,7 +223,7 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
     hit = await resolve_affiliate(db, merchant["_id"], inp)
     if not hit:
         return None
-    affiliate, source, click_id = hit
+    affiliate, source, click_id, via = hit
     # The program's own team signing up to their own product is never a referral.
     if email and await _is_team_email(db, merchant, email):
         return None
@@ -224,6 +237,7 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
         "campaign_id": affiliate["campaign_id"],
         "click_id": click_id,
         "source": source,
+        "via": via,
         "status": "lead",
         "email": email,
         "external_user_id": inp.external_user_id,
