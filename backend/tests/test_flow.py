@@ -255,6 +255,8 @@ async def test_commission_window_ends(client, db):
 async def test_overview_and_tenant_isolation(client):
     o = (await client.get("/merchant/overview", headers=auth(S["owner"]))).json()
     assert o["affiliates"] == 2 and o["customers"] == 3 and o["installed"]
+    # Only signups with a tracked click count toward the click rate.
+    assert 0 < o["leads_from_clicks"] < o["leads"] and o["imported_leads"] == 0
     # The affiliate has no merchant workspace and can't read Acme's data
     assert (await client.get("/merchant/commissions", headers=auth(S["aff"]))).status_code == 404
 
