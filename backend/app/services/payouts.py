@@ -83,6 +83,34 @@ async def payable(db: AsyncDatabase, merchant_id: str, now: datetime | None = No
     return out
 
 
+async def upcoming(db: AsyncDatabase, merchant_id: str, now: datetime | None = None) -> list[dict]:
+    """Unpaid commissions not yet in Ready to pay, per affiliate: still in their hold period,
+    held for review, or due but under the minimum payout. Soonest due first."""
+    now = now or datetime.now(UTC)
+    ready = {cid for line in await payable(db, merchant_id, now) for cid in line["commission_ids"]}
+    rows: dict[str, dict] = {}
+    async for c in db.commissions.find({"merchant_id": merchant_id, "status": "pending", "payout_id": {"$exists": False}}):
+        if c["_id"] in ready:
+            continue
+        row = rows.setdefault(c["affiliate_id"], {"affiliate_id": c["affiliate_id"], "amounts": {}, "count": 0, "held": 0, "under_minimum": False, "next_due_at": None})
+        row["amounts"][c["currency"]] = row["amounts"].get(c["currency"], 0) + c["amount_cents"]
+        row["count"] += 1
+        due_at = c["due_at"].replace(tzinfo=c["due_at"].tzinfo or UTC)
+        if c.get("held"):
+            row["held"] += 1
+        elif due_at <= now:
+            row["under_minimum"] = True
+        elif row["next_due_at"] is None or due_at < row["next_due_at"]:
+            row["next_due_at"] = due_at
+    affiliates = {a["_id"]: a["user_id"] async for a in db.affiliates.find({"_id": {"$in": list(rows)}}, {"user_id": 1})}
+    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": list(affiliates.values())}}, {"name": 1, "email": 1})}
+    for row in rows.values():
+        user = users.get(affiliates.get(row["affiliate_id"]), {})
+        row |= {"name": user.get("name", ""), "email": user.get("email", "")}
+    far = datetime.max.replace(tzinfo=UTC)
+    return sorted(rows.values(), key=lambda r: (r["next_due_at"] or far, r["name"]))
+
+
 async def create_payout(
     db: AsyncDatabase, merchant: dict, currency: str, method: str, platform: PlatformApi | None,
     affiliate_ids: list[str] | None = None, reference: str = "", paypal=None,

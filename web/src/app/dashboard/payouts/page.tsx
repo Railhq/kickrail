@@ -3,8 +3,8 @@ import { cancelPayout, createPayout, syncPayout, undoPayout } from "@/app/action
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { Badge, Card, Empty, StatusBadge, Table } from "@/components/ui";
 import { api } from "@/lib/backend";
-import { date, money } from "@/lib/format";
-import type { PayableLine, Payout, PayoutDetails } from "@/lib/types";
+import { date, money, moneyMap, relative } from "@/lib/format";
+import type { PayableLine, Payout, PayoutDetails, UpcomingLine } from "@/lib/types";
 
 const METHOD_LABEL: Record<PayoutDetails["method"], string> = { paypal: "PayPal", wise: "Wise", bank: "Bank", other: "Other" };
 
@@ -12,7 +12,7 @@ export const metadata = { title: "Payouts" };
 
 export default async function PayoutsPage({ searchParams }: { searchParams: Promise<{ funded?: string; cancelled?: string }> }) {
   const sp = await searchParams;
-  const { payable, history, fee_bps, paypal_connected, stripe_payouts } = await api<{ payable: PayableLine[]; history: Payout[]; fee_bps: number; paypal_connected: boolean; stripe_payouts: boolean }>("/merchant/payouts");
+  const { payable, upcoming, history, fee_bps, paypal_connected, stripe_payouts } = await api<{ payable: PayableLine[]; upcoming: UpcomingLine[]; history: Payout[]; fee_bps: number; paypal_connected: boolean; stripe_payouts: boolean }>("/merchant/payouts");
   const currencies = [...new Set(payable.map((l) => l.currency))];
   return (
     <div className="space-y-6">
@@ -106,6 +106,35 @@ export default async function PayoutsPage({ searchParams }: { searchParams: Prom
             </Card>
           );
         })
+      )}
+
+      {upcoming.length > 0 && (
+        <Card title="Upcoming">
+          <p className="mb-4 text-sm text-muted">Unpaid commissions that aren&apos;t ready yet. Paid an affiliate early? Open them and mark the commissions you paid.</p>
+          <Table head={["Affiliate", "Unpaid", "Commissions", "Why not ready", ""]}>
+            {upcoming.map((u) => {
+              const why = [
+                u.next_due_at && `Next due ${date(u.next_due_at)} (${relative(u.next_due_at)})`,
+                u.under_minimum && "Some due, under the minimum payout",
+                u.held > 0 && `${u.held} held for review`,
+              ].filter(Boolean);
+              return (
+                <tr key={u.affiliate_id} className="align-top">
+                  <td className="px-5 py-3">
+                    <p className="font-medium">{u.name || u.email}</p>
+                    {u.name && <p className="text-xs text-muted">{u.email}</p>}
+                  </td>
+                  <td className="px-5 py-3 num">{moneyMap(u.amounts)}</td>
+                  <td className="px-5 py-3 num">{u.count}</td>
+                  <td className="px-5 py-3 text-sm text-muted">{why.map((w) => <p key={String(w)}>{w}</p>)}</td>
+                  <td className="px-5 py-3 text-right">
+                    <Link className="btn btn-secondary whitespace-nowrap" href={`/dashboard/affiliates/${u.affiliate_id}${u.under_minimum ? "" : "?tab=pending"}#commissions`}>Pay early</Link>
+                  </td>
+                </tr>
+              );
+            })}
+          </Table>
+        </Card>
       )}
 
       <Card title="History">

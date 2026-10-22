@@ -1065,7 +1065,7 @@ async def audit_log(target: str | None = None, m=Depends(current_merchant), db=D
 @router.get("/payouts")
 async def list_payouts(m=Depends(current_merchant), db=Depends(db_dep)):
     history = await db.payouts.find({"merchant_id": m["_id"]}).sort("created_at", -1).limit(100).to_list(None)
-    return {"payable": await payout_svc.payable(db, m["_id"]), "history": [out(p) for p in history], "fee_bps": get_settings().payout_fee_bps, "paypal_connected": bool(m.get("paypal")), "stripe_payouts": get_settings().stripe_payouts}
+    return {"payable": await payout_svc.payable(db, m["_id"]), "upcoming": await payout_svc.upcoming(db, m["_id"]), "history": [out(p) for p in history], "fee_bps": get_settings().payout_fee_bps, "paypal_connected": bool(m.get("paypal")), "stripe_payouts": get_settings().stripe_payouts}
 
 
 class PayoutIn(BaseModel):
