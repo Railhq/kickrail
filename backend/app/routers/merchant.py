@@ -1285,7 +1285,7 @@ async def tax_forms(m=Depends(current_merchant), db=Depends(db_dep)):
     paid = await _paid_by_affiliate(db, m["_id"], year)
     # Affiliates on a campaign whose reward isn't cash are never paid, so they never need a
     # tax form, and a customer-referral program can have one per customer. They stay listed
-    # if they were paid this year or sent a form anyway.
+    # if they were paid this year.
     custom = [c["_id"] async for c in db.campaigns.find({"merchant_id": m["_id"], "reward.type": "custom"}, {"_id": 1})]
     affs = await db.affiliates.find({"merchant_id": m["_id"], "status": {"$ne": "rejected"}, "$or": [{"campaign_id": {"$nin": custom}}, {"_id": {"$in": list(paid)}}]}).to_list(None)
     users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}})}
