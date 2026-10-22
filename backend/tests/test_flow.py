@@ -118,6 +118,7 @@ async def test_click_signup_checkout_invoice(client, db, fakes):
     assert (await send_event(client, hook_url(), "whsec_merchant", "invoice.paid", invoice)).json()["outcome"] == "already earned"
     ref = await db.referrals.find_one({"_id": S["ref_id"]})
     assert ref["status"] == "customer" and ref["stripe_customer_id"] == "cus_1" and ref["external_user_id"] == "u_42"
+    assert ref["via"] == {"token": S["token"]}
 
 
 async def test_bad_signature_rejected(client):
@@ -145,7 +146,11 @@ async def test_creator_code_at_checkout_without_any_click(client, db):
                          {"id": "cs_2", "mode": "payment", "payment_status": "paid", "customer": None, "customer_details": {"email": "podcast-listener@example.net"}, "currency": "usd", "amount_total": 5000, "total_details": {"amount_tax": 0}, "payment_intent": "pi_2", "discounts": [{"promotion_code": "promo_JANECREATOR"}]})
     assert r.json()["outcome"] == "commission 1500 usd"
     ref = await db.referrals.find_one({"email": "podcast-listener@example.net"})
-    assert ref["source"] == "code" and ref["affiliate_id"] == S["aff_id"]
+    assert ref["source"] == "code" and ref["affiliate_id"] == S["aff_id"] and ref["via"] == {"code": "JANECREATOR"}
+    detail = (await client.get(f"/merchant/referrals/{ref['_id']}", headers=auth(S["owner"]))).json()
+    assert detail["via"] == {"code": "JANECREATOR"}
+    found = (await client.get("/merchant/referrals", params={"q": "janecreator"}, headers=auth(S["owner"]))).json()["items"]
+    assert ref["_id"] in [x["id"] for x in found]
 
 
 async def test_self_referral_is_held_for_review(client, db):
