@@ -43,6 +43,11 @@ async def test_custom_rewards(client, db):
     assert c["description"] == "50% off forever when a referral first pays, once; the referred customer gets 25% off at signup"
     assert (await client.post("/merchant/webhooks", json={"url": "https://hooks.globex.com/rwd", "events": ["reward.earned", "reward.fulfilled"]}, headers=auth(owner))).status_code == 200
 
+    # Two link names that share their first 20 characters: the second keeps its link and goes without a code.
+    long1 = (await client.post("/v1/affiliates", json={"email": "l1@rwd.example", "name": "L", "token": "kaleidoscope-serenade981", "send_welcome_email": False}, headers=sk)).json()
+    long2 = await client.post("/v1/affiliates", json={"email": "l2@rwd.example", "name": "L", "token": "kaleidoscope-serenade144", "send_welcome_email": False}, headers=sk)
+    assert long2.status_code == 200 and long2.json()["token"] == "kaleidoscope-serenade144" and long1["code"] == "KALEIDOSCOPE-SERENAD"
+
     # The merchant's app makes each customer an affiliate, with no email.
     r = await client.post("/v1/affiliates", json={"email": "sharer@rwd.example", "name": "Sam", "token": "sam", "metadata": {"user_id": "u_1"}, "send_welcome_email": False}, headers=sk)
     assert r.status_code == 200, r.text
