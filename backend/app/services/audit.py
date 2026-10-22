@@ -25,4 +25,4 @@ async def record(db: AsyncDatabase, merchant_id: str, action: str, target: str, 
 
 
 def payout_detail(payout: dict) -> dict:
-    return {"method": payout["method"], "currency": payout["currency"], "total_cents": payout["total_cents"], "affiliates": len(payout["items"]), "reference": payout.get("reference")}
+    return {"method": payout["method"], "currency": payout["currency"], "total_cents": payout["total_cents"], "affiliates": len(payout["items"]), "reference": payout.get("reference")} | ({"paid_early": len(payout["early_commission_ids"])} if payout.get("early_commission_ids") else {})

@@ -4,7 +4,8 @@ Stripe method: the merchant funds one Checkout payment on the Kickrail platform
 for the batch total, then each affiliate gets a Connect transfer sourced from
 that charge. Manual method: the merchant pays outside Kickrail (PayPal, Wise,
 bank) using the details each affiliate saved, then marks those affiliates paid.
-A manual batch can be undone if it was recorded by mistake. PayPal method: one
+A manual batch can be undone if it was recorded by mistake. The merchant can also mark
+chosen commissions paid from an affiliate's page, including ones not yet due (paid early). PayPal method: one
 PayPal Payouts batch from the merchant's own PayPal account to every affiliate
 who saved a PayPal email; item results are polled until each one settles.
 
@@ -120,16 +121,7 @@ async def create_payout(
         raise ValueError("commissions changed while building the payout; try again")
 
     if method == "manual":
-        now = datetime.now(UTC)
-        payout["paid_at"] = now
-
-        async def paid(tdb):
-            await tdb.payouts.insert_one(payout)
-            await tdb.commissions.update_many({"payout_id": payout_id}, {"$set": {"status": "paid", "paid_at": now}})
-            await notify.payout_paid(tdb, merchant, payout)
-            await audit.record(tdb, merchant["_id"], "payout.created", payout_id, **audit.payout_detail(payout))
-
-        await run_in_transaction(db, paid)
+        await _record_paid(db, merchant, payout)
         return payout
 
     if method == "paypal":
@@ -171,6 +163,69 @@ async def _save_new(db: AsyncDatabase, merchant: dict, payout: dict) -> None:
         await audit.record(tdb, merchant["_id"], "payout.created", payout["_id"], **audit.payout_detail(payout))
 
     await run_in_transaction(db, save)
+
+
+async def _record_paid(db: AsyncDatabase, merchant: dict, payout: dict) -> None:
+    now = datetime.now(UTC)
+    payout["paid_at"] = now
+
+    async def paid(tdb):
+        await tdb.payouts.insert_one(payout)
+        await tdb.commissions.update_many({"payout_id": payout["_id"]}, {"$set": {"status": "paid", "paid_at": now}})
+        await notify.payout_paid(tdb, merchant, payout)
+        await audit.record(tdb, merchant["_id"], "payout.created", payout["_id"], **audit.payout_detail(payout))
+
+    await run_in_transaction(db, paid)
+
+
+async def pay_commissions(db: AsyncDatabase, merchant: dict, commission_ids: list[str], reference: str = "") -> list[dict]:
+    """Marks the chosen unpaid commissions paid, as one manual payout per currency.
+
+    Unlike a batch from Ready to pay, these can be before their due date (paid early) and
+    under the minimum payout: the merchant picked them. Commissions held for review or
+    already in a payout can't be picked."""
+    ids = list(dict.fromkeys(commission_ids))
+    rows = await db.commissions.find({"_id": {"$in": ids}, "merchant_id": merchant["_id"], "status": "pending", "payout_id": {"$exists": False}, "held": {"$ne": True}}).to_list(None)
+    if len(rows) != len(ids):
+        raise ValueError("some of those commissions are already paid, in a payout, held for review or gone; reload and try again")
+    users = {a["_id"]: a["user_id"] async for a in db.affiliates.find({"_id": {"$in": list({c["affiliate_id"] for c in rows})}}, {"user_id": 1})}
+    now = datetime.now(UTC)
+    by_currency: dict[str, list[dict]] = {}
+    for c in rows:
+        by_currency.setdefault(c["currency"], []).append(c)
+    payouts = []
+    for currency, group in sorted(by_currency.items()):
+        items: dict[str, dict] = {}
+        for c in sorted(group, key=lambda c: (c["created_at"], c["_id"])):
+            item = items.setdefault(c["affiliate_id"], {"affiliate_id": c["affiliate_id"], "user_id": users.get(c["affiliate_id"]), "amount_cents": 0, "commission_ids": []})
+            item["amount_cents"] += c["amount_cents"]
+            item["commission_ids"].append(c["_id"])
+        if any(i["amount_cents"] <= 0 for i in items.values()):
+            raise ValueError(f"the {currency.upper()} commissions picked for an affiliate add up to zero or less")
+        payout_id = new_id("po")
+        early = [c["_id"] for c in group if c["due_at"].replace(tzinfo=c["due_at"].tzinfo or UTC) > now]
+        payout = {
+            "_id": payout_id,
+            "merchant_id": merchant["_id"],
+            "currency": currency,
+            "method": "manual",
+            "status": "paid",
+            "items": list(items.values()),
+            "total_cents": sum(i["amount_cents"] for i in items.values()),
+            "fee_cents": 0,
+            "created_at": now,
+            **({"reference": reference} if reference else {}),
+            # Paid before their due date: if one is refunded later it becomes a clawback.
+            **({"early_commission_ids": early} if early else {}),
+        }
+        all_ids = [c["_id"] for c in group]
+        res = await db.commissions.update_many({"_id": {"$in": all_ids}, "payout_id": {"$exists": False}, "status": "pending"}, {"$set": {"payout_id": payout_id}})
+        if res.modified_count != len(all_ids):
+            await db.commissions.update_many({"payout_id": payout_id}, {"$unset": {"payout_id": ""}})
+            raise ValueError("commissions changed while building the payout; try again")
+        await _record_paid(db, merchant, payout)
+        payouts.append(payout)
+    return payouts
 
 
 async def undo_manual_payout(db: AsyncDatabase, merchant_id: str, payout_id: str) -> bool:

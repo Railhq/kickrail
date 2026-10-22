@@ -15,12 +15,31 @@ function source(key: string) {
   return key;
 }
 
-/** Commissions as a ledger. On a referral's own page the customer column is left out, since it's always that customer. */
-export function CommissionTable({ rows, withCustomer = true }: { rows: Commission[]; withCustomer?: boolean }) {
+/** Commissions as a ledger. On a referral's own page the customer column is left out, since it's always that customer.
+ * With `pickForm`, each unpaid row gets a checkbox belonging to that form, for marking chosen commissions paid. */
+export function CommissionTable({ rows, withCustomer = true, pickForm }: { rows: Commission[]; withCustomer?: boolean; pickForm?: string }) {
+  const head = [withCustomer ? "Affiliate / customer" : "Affiliate", "Amount", "On payment", "Status", "Payable", "Source", ""];
   return (
-    <Table head={[withCustomer ? "Affiliate / customer" : "Affiliate", "Amount", "On payment", "Status", "Payable", "Source", ""]}>
+    <Table head={pickForm ? ["", ...head] : head}>
       {rows.map((c) => (
         <tr key={c.id} className="align-top">
+          {pickForm && (
+            <td className="py-3 pl-5">
+              {c.status === "pending" && (
+                <input
+                  type="checkbox"
+                  name="commission_ids"
+                  value={c.id}
+                  form={pickForm}
+                  data-cents={c.amount_cents}
+                  data-currency={c.currency}
+                  disabled={!!c.held || !!c.payout_id}
+                  title={c.held ? "Held for review: approve the referral first" : c.payout_id ? "Already in a payout" : undefined}
+                  aria-label={`Pick ${money(c.amount_cents, c.currency)}`}
+                />
+              )}
+            </td>
+          )}
           <td className="px-5 py-3">
             <Link href={`/dashboard/affiliates/${c.affiliate_id}`} className="hover:underline">{c.affiliate_name}</Link>
             {withCustomer && c.referral_id && (
