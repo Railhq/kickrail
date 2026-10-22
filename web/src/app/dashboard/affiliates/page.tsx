@@ -3,13 +3,15 @@ import { addAffiliate, setAffiliateStatus, updateAffiliate } from "@/app/actions
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { Badge, Card, Empty, Field, StatusBadge, Table } from "@/components/ui";
 import { api } from "@/lib/backend";
-import { date, money } from "@/lib/format";
+import { date, displayMoney, type Fx, fxNote } from "@/lib/format";
 import type { Affiliate, Campaign } from "@/lib/types";
 
 export const metadata = { title: "Affiliates" };
 
+
 export default async function AffiliatesPage() {
-  const [affs, campaigns] = await Promise.all([api<Affiliate[]>("/merchant/affiliates"), api<Campaign[]>("/merchant/campaigns")]);
+  const [affs, campaigns, fx] = await Promise.all([api<Affiliate[]>("/merchant/affiliates"), api<Campaign[]>("/merchant/campaigns"), api<Fx>("/merchant/fx")]);
+  const mixed = affs.some((a) => Object.values(a.earned).filter(Boolean).length > 1 || displayMoney(a.earned, fx).rest);
   const campaignName = Object.fromEntries(campaigns.map((c) => [c.id, c.name]));
   return (
     <div className="space-y-6">
@@ -74,8 +76,16 @@ export default async function AffiliatesPage() {
                 <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.leads}</td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5 num">{a.customers}</td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5 num">
-                  {money(a.earned_cents)}
-                  <p className="whitespace-nowrap text-xs text-muted">{money(a.paid_cents)} paid</p>
+                  {(() => {
+                    const [earned, paid] = [displayMoney(a.earned, fx), displayMoney(a.paid, fx)];
+                    return (
+                      <div className="whitespace-nowrap">
+                        {earned.main}
+                        {earned.rest && <p className="text-xs text-muted">{earned.rest}</p>}
+                        <p className="mt-1 text-xs text-muted">{paid.main} paid</p>
+                      </div>
+                    );
+                  })()}
                 </td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5">
                   <div className="flex w-24 flex-col items-stretch gap-1.5">
@@ -104,6 +114,7 @@ export default async function AffiliatesPage() {
           </Table>
         )}
       </Card>
+      {mixed && <p className="text-xs text-muted">{fxNote(fx)}</p>}
     </div>
   );
 }

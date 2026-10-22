@@ -1,3 +1,5 @@
+import type { Fx } from "./format";
+
 export type Merchant = {
   id: string;
   name: string;
@@ -6,7 +8,7 @@ export type Merchant = {
   public_key: string;
   secret_key_hint: string;
   owner_id: string;
-  settings: { cookie_days: number; param_names: string[]; auto_approve: boolean; affiliate_links: boolean; require_tax_form: boolean; attribution: "first" | "last"; emails: Record<string, boolean> };
+  settings: { cookie_days: number; param_names: string[]; auto_approve: boolean; affiliate_links: boolean; require_tax_form: boolean; attribution: "first" | "last"; display_currency: string; emails: Record<string, boolean> };
   branding: Branding;
   portal_domains: PortalDomain[];
   domain_limit: number;
@@ -110,8 +112,8 @@ export type Affiliate = {
   clicks: number;
   leads: number;
   customers: number;
-  earned_cents: number;
-  paid_cents: number;
+  earned: Record<string, number>;
+  paid: Record<string, number>;
   links: AffiliateLink[];
   codes: AffiliateCode[];
   tax_form: "w9" | "w8ben" | "w8bene" | null;
@@ -134,7 +136,19 @@ export type Referral = {
   flags_cleared?: boolean;
   rejected?: boolean;
   test?: boolean;
+  first_paid_at?: string | null;
+  rewardful_id?: string;
   created_at: string;
+};
+
+/** One page of a dashboard list. */
+export type Page<T> = { items: T[]; total: number; page: number; page_size: number };
+
+export type ReferralDetail = Referral & {
+  affiliate: { id: string; name: string; email: string; token: string };
+  campaign: { id: string; name: string } | null;
+  click: { token: string; landing_url: string; referrer: string; created_at: string } | null;
+  commissions: Commission[];
 };
 
 export type Commission = {
@@ -150,6 +164,8 @@ export type Commission = {
   source_key: string;
   void_reason?: string;
   payout_id?: string;
+  referral_id?: string;
+  customer?: string | null;
   created_at: string;
 };
 
@@ -198,6 +214,7 @@ export type PortalView = {
   codes: AffiliateCode[];
   can_add_links: boolean;
   last_test: { at: string; url: string } | null;
+  fx: Fx;
   payouts_enabled: boolean;
   can_be_paid: boolean;
   has_tax_form: boolean;

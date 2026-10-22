@@ -8,6 +8,9 @@ import type { Import, Merchant } from "@/lib/types";
 import { RewardfulImport } from "./RewardfulImport";
 import { ConnectStripeButton, ConnectStripeForm, DisconnectStripe, RotateSecret } from "./StripeForms";
 
+// Same list as the backend's fx.DISPLAY_CURRENCIES.
+const DISPLAY_CURRENCIES = ["usd", "eur", "gbp", "cad", "aud", "inr", "jpy", "sgd", "chf", "nzd", "sek", "brl", "mxn"];
+
 export const metadata = { title: "Settings" };
 
 const EMAIL_KINDS: [string, string][] = [
@@ -131,6 +134,11 @@ stripe.customers.create({ email, metadata: { kr_ref: req.cookies.kr_ref } });`;
           <Field label="Website"><input className="input" name="website" type="url" defaultValue={m.website} required /></Field>
           <Field label="Cookie window (days)" hint="How long a click stays attributable before signup."><input className="input" name="cookie_days" type="number" min="1" max="365" defaultValue={m.settings.cookie_days} /></Field>
           <Field label="Link parameters" hint="Comma separated. The first is used in affiliate links."><input className="input font-mono" name="param_names" defaultValue={m.settings.param_names.join(", ")} /></Field>
+          <Field label="Display currency" hint="Totals that mix currencies are shown as one approximate amount in this currency, at today's ECB rate. Commissions and payouts keep the sale's currency.">
+            <select className="input" name="display_currency" defaultValue={m.settings.display_currency ?? "usd"}>
+              {DISPLAY_CURRENCIES.map((c) => <option key={c} value={c}>{c.toUpperCase()}</option>)}
+            </select>
+          </Field>
           <div className="space-y-2 sm:col-span-2">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="auto_approve" defaultChecked={m.settings.auto_approve} /> Approve new affiliates automatically

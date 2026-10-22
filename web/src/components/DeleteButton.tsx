@@ -1,9 +1,12 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { deleteRecord } from "@/app/actions";
 
-export function DeleteButton({ kind, id, confirmText }: { kind: "referrals" | "commissions"; id: string; confirmText: string }) {
+/** `after`: where to go once it's deleted, for a page that shows only this record. */
+export function DeleteButton({ kind, id, confirmText, after }: { kind: "referrals" | "commissions"; id: string; confirmText: string; after?: string }) {
+  const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   return (
@@ -18,6 +21,7 @@ export function DeleteButton({ kind, id, confirmText }: { kind: "referrals" | "c
           start(async () => {
             const r = await deleteRecord(kind, id, reason);
             setError(r?.error ?? null);
+            if (!r?.error && after) router.push(after);
           });
         }}
       >
