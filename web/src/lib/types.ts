@@ -8,8 +8,9 @@ export type Merchant = {
   public_key: string;
   secret_key_hint: string;
   owner_id: string;
-  settings: { cookie_days: number; param_names: string[]; auto_approve: boolean; affiliate_links: boolean; require_tax_form: boolean; attribution: "first" | "last"; display_currency: string; emails: Record<string, boolean> };
+  settings: { cookie_days: number; param_names: string[]; auto_approve: boolean; affiliate_links: boolean; require_tax_form: boolean; reject_self_referrals: boolean; attribution: "first" | "last"; display_currency: string; emails: Record<string, boolean> };
   branding: Branding;
+  terms: Terms | null;
   portal_domains: PortalDomain[];
   domain_limit: number;
   plan: PlanSummary;
@@ -70,7 +71,7 @@ export type BillingInfo = {
   can_manage: boolean;
 };
 
-export type Branding = { logo_url?: string | null; color?: string | null; headline?: string | null; description?: string | null; welcome_message?: string | null; terms_url?: string | null; reply_to?: string | null };
+export type Branding = { logo_url?: string | null; favicon_url?: string | null; color?: string | null; headline?: string | null; description?: string | null; welcome_message?: string | null; terms_url?: string | null; reply_to?: string | null };
 
 export type Rule = { type: "percent"; bps: number } | { type: "flat"; cents: number; currency: string } | { type: "none" };
 
@@ -245,7 +246,8 @@ export type Payout = {
 export type PortalView = {
   affiliate_id: string;
   status: string;
-  program: { slug: string; name: string; website: string; terms: string | null; hold_days: number | null; branding: Branding; powered_by: boolean };
+  program: { slug: string; name: string; website: string; terms: string | null; hold_days: number | null; branding: Branding; has_terms: boolean; powered_by: boolean };
+  assets: PortalAsset[];
   min_payout_cents: number;
   link: string;
   test_link: string;
@@ -285,3 +287,15 @@ export type Import = {
   started_at: string;
   finished_at: string | null;
 };
+
+export type Terms = { title: string; html: string; updated_at: string };
+
+export type AssetType = "image" | "file" | "link" | "text";
+
+export type StoredFile = { id: string; name: string; content_type: string; size: number; url: string };
+
+export type Asset = { id: string; type: AssetType; name: string; description: string; status: "draft" | "published"; url: string | null; text: string | null; file: StoredFile | null; created_at: string; updated_at: string };
+
+export type AssetPage = { items: Asset[]; counts: { all: number; published: number; draft: number }; storage: { used: number; limit: number } };
+
+export type PortalAsset = { id: string; type: AssetType; name: string; description: string; url?: string; text?: string; file: StoredFile | null };

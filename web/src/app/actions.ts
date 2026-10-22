@@ -95,6 +95,7 @@ export async function updateSettings(_: State, f: FormData): Promise<State> {
         auto_approve: f.get("auto_approve") === "on",
         affiliate_links: f.get("affiliate_links") === "on",
         require_tax_form: f.get("require_tax_form") === "on",
+        reject_self_referrals: f.get("reject_self_referrals") === "on",
         attribution: f.get("attribution") === "last" ? "last" : "first",
         display_currency: str(f, "display_currency") || undefined,
       },
@@ -112,7 +113,7 @@ export async function saveEmailSettings(_: State, f: FormData): Promise<State> {
 }
 
 export async function saveBranding(_: State, f: FormData): Promise<State> {
-  const body = Object.fromEntries(["logo_url", "color", "headline", "description", "welcome_message", "terms_url", "reply_to"].map((k) => [k, str(f, k) || null]));
+  const body = Object.fromEntries(["logo_url", "favicon_url", "color", "headline", "description", "welcome_message", "reply_to"].map((k) => [k, str(f, k) || null]));
   const r = await attempt(() => api("/merchant/branding", { method: "PUT", body: { ...body, headline: body.headline ?? "", description: body.description ?? "", welcome_message: body.welcome_message ?? "" } }));
   revalidatePath("/dashboard", "layout");
   return r.error ? { error: r.error } : { ok: "Saved" };
@@ -340,6 +341,47 @@ export async function revokeInvite(id: string) {
 export async function removeMember(userId: string) {
   await api(`/merchant/team/members/${userId}`, { method: "DELETE" });
   revalidatePath("/dashboard", "layout");
+}
+
+export async function makeOwner(userId: string) {
+  await api("/merchant/team/owner", { body: { user_id: userId } });
+  revalidatePath("/dashboard", "layout");
+}
+
+export async function saveTerms(_: State, f: FormData): Promise<State> {
+  const r = await attempt(() => api("/merchant/terms", { method: "PUT", body: { title: str(f, "title"), html: str(f, "html"), external_url: str(f, "external_url") || null } }));
+  revalidatePath("/dashboard/terms");
+  return r.error ? { error: r.error } : { ok: "Saved" };
+}
+
+export async function createAsset(_: State, f: FormData): Promise<State> {
+  const type = str(f, "type");
+  const r = await attempt(() =>
+    api("/merchant/assets", {
+      body: { type, name: str(f, "name"), description: str(f, "description"), status: str(f, "status") || "draft", url: type === "link" ? str(f, "url") : undefined, text: type === "text" ? str(f, "text") : undefined, file_id: str(f, "file_id") || undefined },
+    }),
+  );
+  revalidatePath("/dashboard/assets");
+  return r.error ? { error: r.error } : { ok: "Added" };
+}
+
+export async function updateAsset(id: string, _: State, f: FormData): Promise<State> {
+  const body: Record<string, string> = { name: str(f, "name"), description: str(f, "description") };
+  if (f.has("url")) body.url = str(f, "url");
+  if (f.has("text")) body.text = str(f, "text");
+  const r = await attempt(() => api(`/merchant/assets/${id}`, { method: "PATCH", body }));
+  revalidatePath("/dashboard/assets");
+  return r.error ? { error: r.error } : { ok: "Saved" };
+}
+
+export async function setAssetStatus(id: string, status: "draft" | "published") {
+  await api(`/merchant/assets/${id}`, { method: "PATCH", body: { status } });
+  revalidatePath("/dashboard/assets");
+}
+
+export async function deleteAsset(id: string) {
+  await api(`/merchant/assets/${id}`, { method: "DELETE" });
+  revalidatePath("/dashboard/assets");
 }
 
 export async function acceptInvite(token: string) {

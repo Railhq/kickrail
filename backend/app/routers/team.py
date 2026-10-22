@@ -11,7 +11,7 @@ from ..config import get_settings
 from ..db import run_in_transaction
 from ..ids import new_id, random_id, sha256
 from ..security import current_merchant, current_user, db_dep
-from ..services import notify
+from ..services import audit, notify
 
 router = APIRouter(prefix="/merchant/team", tags=["team"])
 
@@ -81,5 +81,29 @@ async def remove(user_id: str, m=Depends(current_merchant), user=Depends(current
         raise HTTPException(403, "only the owner can remove other members")
     res = await db.merchants.update_one({"_id": m["_id"], "member_ids": user_id}, {"$pull": {"member_ids": user_id}})
     if not res.modified_count:
+        raise HTTPException(404, "not a member")
+    return {"ok": True}
+
+
+class OwnerIn(BaseModel):
+    user_id: str
+
+
+@router.post("/owner")
+async def transfer_owner(body: OwnerIn, m=Depends(current_merchant), user=Depends(current_user), db=Depends(db_dep)):
+    """Hands the program to another member. The old owner stays on the team."""
+    if user["_id"] != m.get("owner_id"):
+        raise HTTPException(403, "only the owner can hand over ownership")
+    if body.user_id == m.get("owner_id"):
+        raise HTTPException(400, "they already own this program")
+
+    async def move(tdb) -> bool:
+        res = await tdb.merchants.update_one({"_id": m["_id"], "owner_id": user["_id"], "member_ids": body.user_id}, {"$set": {"owner_id": body.user_id}})
+        if not res.modified_count:
+            return False
+        await audit.record(tdb, m["_id"], "team.owner_changed", body.user_id, previous_owner=user["_id"])
+        return True
+
+    if not await run_in_transaction(db, move):
         raise HTTPException(404, "not a member")
     return {"ok": True}

@@ -127,7 +127,7 @@ async def test_branding_and_email_toggles(client):
     assert r.json()["branding"]["color"] == "#7c3aed"
     r = await client.patch("/merchant", json={"emails": {"commission": False}}, headers=owner())
     assert r.status_code == 200, r.text
-    assert r.json()["settings"]["emails"] == {"welcome": True, "approved": True, "commission": False, "payout": True, "new_affiliate": True}
+    assert r.json()["settings"]["emails"] == {"welcome": True, "approved": True, "commission": False, "payout": True, "new_affiliate": True, "self_referral": True}
     assert (await client.patch("/merchant", json={"emails": {"nope": True}}, headers=owner())).status_code == 422
     prog = (await client.get("/programs/globex")).json()
     assert prog["branding"]["headline"] == "Earn with Globex" and "plus 3.00 USD per signup" in prog["terms"]

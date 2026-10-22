@@ -87,3 +87,13 @@ input[type="radio"] {
     @apply font-mono tabular-nums tracking-tight;
   }
 }
+
+/* Merchant-written terms, from the hosted terms editor. */
+.prose-terms > * + * { margin-top: 0.85em; }
+.prose-terms h2 { font-size: 1.35em; font-weight: 600; margin-top: 1.6em; }
+.prose-terms h3 { font-size: 1.12em; font-weight: 600; margin-top: 1.4em; }
+.prose-terms ul { list-style: disc; padding-left: 1.4em; }
+.prose-terms ol { list-style: decimal; padding-left: 1.4em; }
+.prose-terms li + li { margin-top: 0.3em; }
+.prose-terms a { text-decoration: underline; text-underline-offset: 3px; }
+.prose-terms blockquote { border-left: 3px solid var(--color-line); padding-left: 1em; color: var(--color-muted); }

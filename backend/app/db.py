@@ -145,6 +145,8 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
         "webhook_endpoints": [([("merchant_id", A)], {})],
         "webhook_deliveries": [([("status", A), ("next_attempt_at", A)], {}), ([("endpoint_id", A), ("created_at", D)], {}), ([("event_id", A)], {})],
         "emails": [([("status", A), ("next_attempt_at", A)], {}), ([("merchant_id", A), ("created_at", D)], {})],
+        "assets": [([("merchant_id", A), ("status", A), ("created_at", D)], {})],
+        "files": [([("merchant_id", A)], {})],
         "invites": [([("token_hash", A)], {"unique": True}), ([("merchant_id", A)], {})],
     }
     await _migrate_portal_domains(db)

@@ -3,8 +3,9 @@ import { addOwnLink, changeToken, deleteOwnLink } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge, Card, Empty, Notice, Stat, StatGroup, StatusBadge, Table } from "@/components/ui";
-import { date, displayMoney, fxNote, money, relative } from "@/lib/format";
-import type { PortalView as View } from "@/lib/types";
+import { termsHref } from "@/app/join/JoinView";
+import { date, displayMoney, fileSize, fxNote, money, relative } from "@/lib/format";
+import type { PortalAsset, PortalView as View } from "@/lib/types";
 
 /**
  * One program as its affiliate sees it. The merchant's "view as" renders the same
@@ -18,6 +19,7 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
   const bal = { in_hold: displayMoney(pick("in_hold"), d.fx), payable: displayMoney(pick("payable"), d.fx), paid: displayMoney(pick("paid"), d.fx) };
   const nextRelease = d.commissions.filter((c) => c.status === "pending" && !c.held_for_review && new Date(c.due_at) > new Date()).map((c) => c.due_at).sort()[0];
   const b = d.program.branding ?? {};
+  const terms = termsHref({ ...d.program, branding: b });
   const accent = b.color ?? undefined;
 
   return (
@@ -33,7 +35,7 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
           <StatusBadge status={d.status} />
         </div>
         {d.program.terms && <p className="mt-2 text-sm text-muted">You earn {d.program.terms}.</p>}
-        {b.terms_url && <a href={b.terms_url} target="_blank" rel="noopener" className="mt-1 inline-block text-xs text-muted underline">Program terms ↗</a>}
+        {terms && <a href={terms} target="_blank" rel="noopener" className="mt-1 inline-block text-xs text-muted underline">Program terms ↗</a>}
       </div>
 
       {d.status === "pending" && <Notice>Your application is waiting for approval. You can already test your link below; real clicks are tracked once you&apos;re approved.</Notice>}
@@ -194,6 +196,13 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
         </Card>
       )}
 
+      {d.assets.length > 0 && (
+        <Card title="Assets">
+          <p className="-mt-1 mb-4 text-sm text-muted">From {d.program.name}, for promoting them. Links and copy already carry your link.</p>
+          <div className="grid gap-4 sm:grid-cols-2">{d.assets.map((a) => <AssetCard key={a.id} a={a} />)}</div>
+        </Card>
+      )}
+
       {(!custom || d.commissions.length > 0) && <Card title="Commissions">
         {d.commissions.length === 0 ? (
           <Empty>No commissions yet. You earn when someone you referred pays.</Empty>
@@ -225,6 +234,28 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
           <a className="underline" href="https://kickrail.com/signup?utm_source=powered_by&utm_medium=portal" target="_blank" rel="noopener">Run your own affiliate program</a>
         </p>
       )}
+    </div>
+  );
+}
+
+function AssetCard({ a }: { a: PortalAsset }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-line p-3">
+      {a.type === "image" && a.file && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={a.file.url} alt={a.name} className="h-32 w-full rounded-lg bg-sunk/50 object-contain" />
+      )}
+      <div>
+        <p className="font-medium">{a.name}</p>
+        {a.description && <p className="text-sm text-muted">{a.description}</p>}
+      </div>
+      {a.type === "link" && a.url && <p className="break-all rounded-lg bg-sunk/50 px-3 py-2 font-mono text-xs">{a.url}</p>}
+      {a.type === "text" && a.text && <p className="whitespace-pre-line rounded-lg bg-sunk/50 px-3 py-2 text-sm">{a.text}</p>}
+      <div className="mt-auto flex flex-wrap items-center gap-2">
+        {a.file && <a className="btn btn-secondary" href={a.file.url} download={a.file.name}>Download <span className="text-muted">{fileSize(a.file.size)}</span></a>}
+        {a.type === "link" && a.url && <CopyButton text={a.url} />}
+        {a.type === "text" && a.text && <CopyButton text={a.text} />}
+      </div>
     </div>
   );
 }

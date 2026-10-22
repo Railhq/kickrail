@@ -1,5 +1,6 @@
-import { inviteMember, removeMember, revokeInvite } from "@/app/actions";
+import { inviteMember, makeOwner, removeMember, revokeInvite } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
+import { ConfirmButton } from "@/components/ConfirmButton";
 import { Badge, Card, Table } from "@/components/ui";
 import { api } from "@/lib/backend";
 import { date } from "@/lib/format";
@@ -15,7 +16,7 @@ export default async function TeamPage() {
   return (
     <div className="space-y-6">
       <h1 className="page-title">Team</h1>
-      <p className="text-sm text-muted">Everyone on the team can run the program: approve affiliates, record payouts, change settings. Only the owner can remove people and download tax IDs.</p>
+      <p className="text-sm text-muted">Everyone on the team can run the program: approve affiliates, record payouts, change settings. Only the owner can remove people, download tax IDs and hand the program to someone else.</p>
       <Card title="Members">
         <Table head={["Name", "Email", ""]}>
           {t.members.map((u) => (
@@ -23,9 +24,14 @@ export default async function TeamPage() {
               <td className="px-5 py-3 font-medium">{u.name} {u.owner && <Badge tone="green">owner</Badge>} {u.id === me.user.id && <span className="text-xs text-muted">(you)</span>}</td>
               <td className="px-5 py-3 text-muted">{u.email}</td>
               <td className="px-5 py-3 text-right">
-                {!u.owner && (isOwner || u.id === me.user.id) && (
-                  <form action={removeMember.bind(null, u.id)}><button className="btn btn-danger">{u.id === me.user.id ? "Leave" : "Remove"}</button></form>
-                )}
+                <div className="flex justify-end gap-2">
+                  {!u.owner && isOwner && (
+                    <ConfirmButton action={makeOwner.bind(null, u.id)} confirmText={`Make ${u.name || u.email} the owner? You stay on the team, but only they can remove people, download tax IDs and hand ownership on.`}>Make owner</ConfirmButton>
+                  )}
+                  {!u.owner && (isOwner || u.id === me.user.id) && (
+                    <form action={removeMember.bind(null, u.id)}><button className="btn btn-danger">{u.id === me.user.id ? "Leave" : "Remove"}</button></form>
+                  )}
+                </div>
               </td>
             </tr>
           ))}

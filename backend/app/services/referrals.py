@@ -24,7 +24,7 @@ from pymongo.errors import DuplicateKeyError
 from ..db import run_in_transaction
 from ..domain.fraud import canonical_email, self_referral_flags
 from ..ids import new_id
-from . import notify, rewards
+from . import audit, notify, rewards
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +137,13 @@ async def _older_customer(db: AsyncDatabase, referral: dict, customer_id: str, c
     return True
 
 
+def _auto_reject(merchant: dict, flags: list) -> dict:
+    """The program chose to reject suspected self-referrals outright instead of holding them for review."""
+    if flags and (merchant.get("settings") or {}).get("reject_self_referrals"):
+        return {"rejected": True, "flags_cleared": True, "auto_rejected": True}
+    return {}
+
+
 async def _is_team_email(db: AsyncDatabase, merchant: dict, email: str) -> bool:
     ids = list({merchant.get("owner_id"), *(merchant.get("member_ids") or [])} - {None})
     target = canonical_email(email)
@@ -172,6 +179,7 @@ async def _last_touch(db: AsyncDatabase, merchant: dict, existing: dict, inp: At
         "via": via,
         "flags": flags,
         "flags_cleared": False,
+        **_auto_reject(merchant, flags),
         "test": bool(click and click.get("test")),
         "moved_at": datetime.now(UTC),
     }
@@ -212,6 +220,8 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
             await tdb.referrals.update_one({"_id": existing["_id"]}, update)
             if moved:
                 await notify.referral_updated(tdb, merchant["_id"], updated, existing["affiliate_id"])
+                if fill.get("flags"):
+                    await notify.self_referral(tdb, merchant, updated)
 
         try:
             await run_in_transaction(db, save)
@@ -244,6 +254,7 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
         "stripe_customer_id": inp.stripe_customer_id,
         "first_paid_at": None,
         "flags": flags,
+        **_auto_reject(merchant, flags),
         "auto": inp.auto or None,
         # Came through a kr_test=1 link: shown to the merchant, left out of counts and commissions.
         "test": True if click and click.get("test") else None,
@@ -255,6 +266,10 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
     async def create(tdb):
         await tdb.referrals.insert_one(referral)
         await notify.referral_created(tdb, merchant["_id"], referral)
+        if flags:
+            await notify.self_referral(tdb, merchant, referral)
+        if referral.get("auto_rejected"):
+            await audit.record(tdb, merchant["_id"], "referral.rejected", referral["_id"], automatic=True, reason="suspected self-referral")
 
     try:
         await run_in_transaction(db, create)
@@ -264,7 +279,7 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
             raise
         return await attach_referral(db, merchant, inp, customer_created, _retry=False)
     # A form the script picked up on its own may be a newsletter box, not a signup.
-    if not inp.auto and not referral.get("test"):
+    if not inp.auto and not referral.get("test") and not referral.get("rejected"):
         await award_lead_bounty(db, merchant, referral)
         await rewards.on_signup(db, merchant, referral)
     return referral, True
