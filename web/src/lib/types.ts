@@ -173,6 +173,17 @@ export type Commission = {
 
 export type PayoutDetails = { method: "paypal" | "wise" | "bank" | "other"; value: string };
 
+export type UpcomingLine = {
+  affiliate_id: string;
+  name: string;
+  email: string;
+  amounts: Record<string, number>;
+  count: number;
+  held: number;
+  under_minimum: boolean;
+  next_due_at: string | null;
+};
+
 export type PayableLine = {
   affiliate_id: string;
   name: string;

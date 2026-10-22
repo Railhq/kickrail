@@ -46,7 +46,12 @@ async def test_pay_chosen_commissions_early(client, db):
     assert await ids(due="true") == {due}
     assert await ids(due="false") == {early, later, inr, held}
     # Under the minimum payout, so Ready to pay has nothing.
-    assert (await client.get("/merchant/payouts", headers=h)).json()["payable"] == []
+    listed = (await client.get("/merchant/payouts", headers=h)).json()
+    assert listed["payable"] == []
+    # Payouts shows them as upcoming instead: one row for the affiliate, soonest due date first.
+    [up] = listed["upcoming"]
+    assert up["affiliate_id"] == aff["id"] and up["count"] == 5 and up["held"] == 1 and up["under_minimum"] is True
+    assert up["amounts"] == {"usd": 1000 + 3160 + 500 + 700, "inr": 199960} and up["next_due_at"].startswith((now + timedelta(days=20)).date().isoformat())
 
     r = await client.post("/merchant/payouts/commissions", json={"commission_ids": [held]}, headers=h)
     assert r.status_code == 400 and "held for review" in r.json()["detail"]
