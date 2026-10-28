@@ -275,14 +275,15 @@ def mask_email(email: str | None) -> str | None:
 
 
 async def click_count(db, aff: dict, since: datetime | None = None) -> int:
-    """Tracked clicks plus the click total imported from Rewardful. Tracked clicks count
-    only from the import, since the imported total already covers what came before."""
+    """All time: tracked clicks plus the click total imported from Rewardful, with tracked
+    clicks counted only from the import, since the imported total already covers what came
+    before. Since a date: tracked clicks only, as Rewardful's total has no dates."""
     q: dict = {"affiliate_id": aff["_id"], "test": False}
-    start = max([t for t in (since, aff.get("imported_clicks_at")) if t], default=None)
-    if start:
-        q["created_at"] = {"$gte": start}
-    n = await db.clicks.count_documents(q)
-    return n + (aff.get("imported_clicks") or 0 if since is None else 0)
+    if since:
+        return await db.clicks.count_documents({**q, "created_at": {"$gte": since}})
+    if aff.get("imported_clicks_at"):
+        q["created_at"] = {"$gte": aff["imported_clicks_at"]}
+    return await db.clicks.count_documents(q) + (aff.get("imported_clicks") or 0)
 
 
 async def pipeline(db, aff: dict, for_merchant: bool = False) -> dict:
