@@ -288,14 +288,19 @@ async def test_backfill_visitors_gives_clicks_a_history(client, db, rewardful):
     p = await pipeline(db, ann)
     assert p["clicks"] == 5 and p["customers"] == 2 and p["customers_from_clicks"] == 0
 
-    AFFILIATES[0]["visitors"], AFFILIATES[1]["visitors"] = 40, 0
+    # One added over the API keeps the Rewardful id in metadata.
+    api_aff = {k: v for k, v in ann.items() if k not in ("rewardful_id", "code")}
+    await db.affiliates.insert_one({**api_aff, "_id": "aff_viaapi", "user_id": "usr_viaapi", "token": "viaapi", "metadata": {"rewardful_id": "a-7"}})
+    AFFILIATES[0]["visitors"], AFFILIATES[1]["visitors"], AFFILIATES[6]["visitors"], AFFILIATES[7]["visitors"] = 40, 0, 9, 3
     try:
         counts = await backfill_visitors(db, mid, FakeRewardful("sk_live_rewardful_1"))
-        assert counts["updated"] == 1 and counts["no_visitors"] == len(AFFILIATES) - 1
+        assert counts == {"seen": len(AFFILIATES), "updated": 2, "no_visitors": len(AFFILIATES) - 3, "not_in_kickrail": 1}
+        assert (await db.affiliates.find_one({"_id": "aff_viaapi"}))["imported_clicks"] == 9
         # Already set: a second run leaves it, --force refreshes it.
         assert (await backfill_visitors(db, mid, FakeRewardful("sk_live_rewardful_1")))["updated"] == 0
     finally:
-        AFFILIATES[0].pop("visitors"), AFFILIATES[1].pop("visitors")
+        for i in (0, 1, 6, 7):
+            AFFILIATES[i].pop("visitors")
     await db.clicks.insert_one({"_id": "clk_vnew", "merchant_id": mid, "affiliate_id": ann["_id"], "test": False, "created_at": datetime.now(UTC) + timedelta(seconds=1)})
 
     ann = await db.affiliates.find_one({"_id": ann["_id"]})
@@ -310,7 +315,7 @@ async def test_backfill_visitors_gives_clicks_a_history(client, db, rewardful):
     assert view["clicks"] == 41
 
     o = (await client.get("/merchant/overview", headers=h)).json()
-    assert o["clicks"] == 41
+    assert o["clicks"] == 41 + 9
     bob_refs = await db.referrals.count_documents({"merchant_id": mid, "affiliate_id": {"$ne": ann["_id"]}})
     assert o["imported_leads"] == bob_refs and o["leads_from_clicks"] == o["leads"] - bob_refs
     rows = (await client.get("/merchant/affiliates", headers=h)).json()
