@@ -20,6 +20,7 @@ MERCHANT_EVENTS = [
     "customer.created",
     "customer.updated",
     "invoice.paid",
+    "payment_intent.succeeded",
     "charge.refunded",
     "charge.dispute.created",
 ]
@@ -32,6 +33,23 @@ def _client(key: str) -> stripe.StripeClient:
 class MerchantApi(Protocol):
     async def payment_intent_for_invoice(self, invoice_id: str) -> str | None: ...
     async def invoice_for_payment_intent(self, payment_intent_id: str) -> str | None: ...
+    async def checkout_session_for_payment_intent(self, payment_intent_id: str) -> str | None: ...
+    async def checkout_session_for_payment_intent(self, payment_intent_id: str) -> str | None:
+        page = await self.c.v1.checkout.sessions.list_async({"payment_intent": payment_intent_id, "limit": 1})
+        return page.data[0].id if page.data else None
+
+    async def succeeded_payment_intents(self, since: datetime):
+        """Every succeeded payment intent created since `since`, oldest page last."""
+        params = {"created": {"gte": int(since.timestamp())}, "limit": 100}
+        while True:
+            page = await self.c.v1.payment_intents.list_async(params)  # type: ignore[arg-type]
+            for pi in page.data:
+                if pi.status == "succeeded":
+                    yield pi.to_dict()
+            if not page.has_more:
+                return
+            params["starting_after"] = page.data[-1].id
+
     async def invoice(self, invoice_id: str) -> dict:
         """An invoice with its discounts expanded: webhooks only carry discount ids."""
         inv = await self.c.v1.invoices.retrieve_async(invoice_id, {"expand": ["discounts"]})
@@ -82,6 +100,9 @@ class MerchantStripe:
     async def delete_webhook(self, endpoint_id: str) -> None:
         await self.c.v1.webhook_endpoints.delete_async(endpoint_id)
 
+    async def update_webhook_events(self, endpoint_id: str) -> None:
+        await self.c.v1.webhook_endpoints.update_async(endpoint_id, {"enabled_events": MERCHANT_EVENTS})  # type: ignore[typeddict-item]
+
     async def payment_intent_for_invoice(self, invoice_id: str) -> str | None:
         page = await self.c.v1.invoice_payments.list_async({"invoice": invoice_id, "status": "paid", "limit": 1})
         for p in page.data:
@@ -95,6 +116,22 @@ class MerchantStripe:
         for p in page.data:
             return p.invoice if isinstance(p.invoice, str) else p.invoice.id
         return None
+
+    async def checkout_session_for_payment_intent(self, payment_intent_id: str) -> str | None:
+        page = await self.c.v1.checkout.sessions.list_async({"payment_intent": payment_intent_id, "limit": 1})
+        return page.data[0].id if page.data else None
+
+    async def succeeded_payment_intents(self, since: datetime):
+        """Every succeeded payment intent created since `since`, oldest page last."""
+        params = {"created": {"gte": int(since.timestamp())}, "limit": 100}
+        while True:
+            page = await self.c.v1.payment_intents.list_async(params)  # type: ignore[arg-type]
+            for pi in page.data:
+                if pi.status == "succeeded":
+                    yield pi.to_dict()
+            if not page.has_more:
+                return
+            params["starting_after"] = page.data[-1].id
 
     async def invoice(self, invoice_id: str) -> dict:
         """An invoice with its discounts expanded: webhooks only carry discount ids."""

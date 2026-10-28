@@ -2,7 +2,8 @@
 
 Everything is idempotent: Stripe retries, and the same payment can arrive as both
 checkout.session.completed and invoice.paid. Commissions are keyed by sourceKey
-("inv:<id>" / "cs:<id>"), so a replay never pays twice.
+("inv:<id>" / "cs:<id>" / "pi:<id>"), so a replay never pays twice, and a payment
+intent that already earned under one key never earns under another.
 """
 
 import logging
@@ -152,11 +153,36 @@ async def _earn_invoice(db, merchant, referral: dict, inv: dict, api: MerchantAp
     return await earn(db, merchant, referral, f"inv:{inv['id']}", base, inv["currency"], paid_at, pi, invoice_lines(inv))
 
 
+async def _payment_intent_succeeded(db, merchant, pi: dict, api: MerchantApi) -> str:
+    """A payment made straight through the Payment Intents API (a one-off purchase with
+    Stripe Elements), which has no invoice and no Checkout Session. Payments that do have
+    one earn from invoice.paid or checkout.session.completed instead."""
+    if pi.get("status") != "succeeded":
+        return "not succeeded"
+    try:
+        if await api.invoice_for_payment_intent(pi["id"]):
+            return "invoice payment: earns on invoice.paid"
+        if await api.checkout_session_for_payment_intent(pi["id"]):
+            return "checkout payment: earns on checkout.session.completed"
+    except Exception:  # missing permission: the payment_intent_id check in earn() still stops a second commission
+        log.warning("owner lookup failed for %s", pi["id"], exc_info=True)
+    hit = await attach_referral(
+        db, merchant, AttachInput(email=pi.get("receipt_email") or (pi.get("metadata") or {}).get("email"), stripe_customer_id=_id(pi.get("customer"))),
+        getattr(api, "customer_created", None),
+    )
+    if not hit:
+        return "no referral"
+    referral, _ = hit
+    return await earn(db, merchant, referral, f"pi:{pi['id']}", pi.get("amount_received") or 0, pi["currency"], _ts(pi.get("created")), pi["id"])
+
+
 async def earn(
     db: AsyncDatabase, merchant: dict, referral: dict, source_key: str, base_cents: int, currency: str, paid_at: datetime,
     payment_intent_id: str | None, lines: list[Line] | None = None,
 ) -> str:
     if await db.commissions.find_one({"merchant_id": merchant["_id"], "source_key": source_key}):
+        return "already earned"
+    if payment_intent_id and await db.commissions.find_one({"merchant_id": merchant["_id"], "payment_intent_id": payment_intent_id, "kind": {"$ne": "lead"}}):
         return "already earned"
     # A commission the merchant deleted stays deleted, even if Stripe sends the payment again.
     if await db.deleted_records.find_one({"merchant_id": merchant["_id"], "source_key": source_key}):
@@ -298,11 +324,37 @@ async def _dispute_created(db, merchant, dispute: dict, api: MerchantApi) -> str
     return await apply_reversal(db, commission, dispute.get("amount") or 0, max(charge_cents, dispute.get("amount") or 0), dispute["id"])
 
 
+async def catch_up_payment_intents(db: AsyncDatabase, factory) -> int:
+    """Once per connected program: earn the one-off payments made before Kickrail
+    listened for payment_intent.succeeded, and add that event to a webhook Kickrail
+    created on the merchant's own account. Safe to repeat: earn() is idempotent."""
+    n = 0
+    async for m in db.merchants.find({"stripe.connected_at": {"$exists": True}, "stripe.pi_caught_up_at": {"$exists": False}}):
+        api = factory(m)
+        done: dict = {"stripe.pi_caught_up_at": datetime.now(UTC)}
+        try:
+            if ep := m["stripe"].get("webhook_endpoint_id"):
+                await api.update_webhook_events(ep)
+            outcomes: dict[str, int] = {}
+            async for pi in api.succeeded_payment_intents(m["stripe"]["connected_at"]):
+                outcome = await _payment_intent_succeeded(db, m, pi, api)
+                outcomes[outcome.split(" ")[0]] = outcomes.get(outcome.split(" ")[0], 0) + 1
+                if outcome.startswith("commission") or outcome.startswith("rewards earned"):
+                    n += 1
+            done["stripe.pi_catch_up"] = outcomes
+        except Exception as e:  # e.g. a restricted key without Payment Intents access
+            log.warning("payment intent catch-up failed for %s", m["_id"], exc_info=True)
+            done["stripe.pi_catch_up"] = {"error": str(e)[:300]}
+        await db.merchants.update_one({"_id": m["_id"]}, {"$set": done})
+    return n
+
+
 HANDLERS = {
     "checkout.session.completed": _checkout_completed,
     "customer.created": _customer,
     "customer.updated": _customer,
     "invoice.paid": _invoice_paid,
+    "payment_intent.succeeded": _payment_intent_succeeded,
     "charge.refunded": _charge_refunded,
     "charge.dispute.created": _dispute_created,
 }

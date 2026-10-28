@@ -15,6 +15,7 @@ from .services.outbox import run_dispatcher
 from .services.payouts import announce_due, poll_paypal
 from .services.paypal import PayPal
 from .services.stripe_api import MerchantStripe
+from .services.stripe_events import catch_up_payment_intents
 from .services.stripe_sync import sync_customers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -24,6 +25,7 @@ async def _periodic(db) -> None:
     await poll_paypal(db, PayPal.for_merchant)
     await check_limits(db)
     await announce_due(db)
+    await catch_up_payment_intents(db, MerchantStripe.for_merchant)
 
 
 async def _each(db) -> None:

@@ -45,7 +45,7 @@ export default function DocsHome() {
       <P><b>2. Connect Stripe.</b> In Settings → Stripe, click <b>Connect with Stripe</b> and approve Kickrail on stripe.com. There is nothing to set up in Stripe itself.</P>
       <P>Prefer not to grant OAuth access? Open Developers → API keys → <b>Create restricted key</b> in Stripe, grant the permissions below, and paste the key instead. Kickrail encrypts it and creates its own webhook endpoint on your account.</P>
       <List>
-        <li>Charges, Invoices, Checkout Sessions, Coupons: <b>Read</b></li>
+        <li>Charges, Invoices, Checkout Sessions, Payment Intents, Coupons: <b>Read</b></li>
         <li>Customers, Promotion Codes, Webhook Endpoints: <b>Write</b></li>
       </List>
 

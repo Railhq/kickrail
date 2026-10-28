@@ -37,6 +37,9 @@ class FakeMerchantStripe:
         self.promotion_codes: list[tuple[str, str]] = []
         self.active_codes: dict[str, str] = {}
         self.invoice_pi: dict[str, str] = {}
+        self.session_pi: dict[str, str] = {}
+        self.payment_intents: list[dict] = []
+        self.webhook_updates: list[str] = []
         self.webhooks_deleted: list[str] = []
         self.customer_times: dict = {}
         self.customer_metadata: dict[str, dict] = {}
@@ -68,6 +71,16 @@ class FakeMerchantStripe:
 
     async def invoice_for_payment_intent(self, pi):
         return next((i for i, p in self.invoice_pi.items() if p == pi), None)
+
+    async def checkout_session_for_payment_intent(self, pi):
+        return next((cs for cs, p in self.session_pi.items() if p == pi), None)
+
+    async def succeeded_payment_intents(self, since):
+        for pi in self.payment_intents:
+            yield pi
+
+    async def update_webhook_events(self, endpoint_id):
+        self.webhook_updates.append(endpoint_id)
 
     async def invoice(self, invoice_id):
         return self.invoices[invoice_id]
