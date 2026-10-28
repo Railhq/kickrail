@@ -229,7 +229,7 @@ async def add_code(db: AsyncDatabase, m: dict, aff: dict, code: str, factory) ->
     return code_obj(await db.affiliate_codes.find_one({"_id": row["_id"]})), warning
 
 
-async def affiliate_view(db: AsyncDatabase, m: dict, aff: dict, user: dict) -> dict:
+async def affiliate_view(db: AsyncDatabase, m: dict, aff: dict, user: dict, for_merchant: bool = False) -> dict:
     """What the affiliate sees for one program. Also what "view as" shows the merchant."""
     campaign = await db.campaigns.find_one({"_id": aff["campaign_id"]})
     last_test = await db.clicks.find_one({"affiliate_id": aff["_id"], "test": True}, sort=[("created_at", -1)])
@@ -261,12 +261,34 @@ async def affiliate_view(db: AsyncDatabase, m: dict, aff: dict, user: dict) -> d
         # "custom": the program rewards with something other than cash, so the portal shows rewards, not money.
         "reward_mode": "custom" if is_custom(campaign) else "cash",
         "assets": await assets.for_affiliate(db, m, aff, link),
-        **await pipeline(db, aff),
+        **await pipeline(db, aff, for_merchant),
     }
 
 
-async def pipeline(db, aff: dict) -> dict:
+def mask_email(email: str | None) -> str | None:
+    """jane.doe@gmail.com -> ja***@gmail.com: enough for an affiliate to recognise a
+    customer they referred, without handing them the merchant's customer list."""
+    if not email or "@" not in email:
+        return None
+    local, domain = email.rsplit("@", 1)
+    return f"{local[:2]}***@{domain}"
+
+
+async def click_count(db, aff: dict, since: datetime | None = None) -> int:
+    """Tracked clicks plus the click total imported from Rewardful. Tracked clicks count
+    only from the import, since the imported total already covers what came before."""
+    q: dict = {"affiliate_id": aff["_id"], "test": False}
+    start = max([t for t in (since, aff.get("imported_clicks_at")) if t], default=None)
+    if start:
+        q["created_at"] = {"$gte": start}
+    n = await db.clicks.count_documents(q)
+    return n + (aff.get("imported_clicks") or 0 if since is None else 0)
+
+
+async def pipeline(db, aff: dict, for_merchant: bool = False) -> dict:
     refs = await db.referrals.find({"affiliate_id": aff["_id"], "test": {"$ne": True}}).to_list(None)
+    by_id = {r["_id"]: r for r in refs}
+    customers = [r for r in refs if r["status"] == "customer"]
     commissions = await db.commissions.find({"affiliate_id": aff["_id"]}).sort("created_at", -1).to_list(None)
     now = datetime.now(UTC)
     totals: dict[str, dict[str, int]] = {}
@@ -281,10 +303,13 @@ async def pipeline(db, aff: dict) -> dict:
         else:
             t["in_hold"] += c["amount_cents"]
     return {
-        "clicks": await db.clicks.count_documents({"affiliate_id": aff["_id"], "test": False}),
-        "clicks_30d": await db.clicks.count_documents({"affiliate_id": aff["_id"], "test": False, "created_at": {"$gte": now - timedelta(days=30)}}),
+        "clicks": await click_count(db, aff),
+        "clicks_30d": await click_count(db, aff, since=now - timedelta(days=30)),
         "leads": len(refs),
-        "customers": sum(1 for r in refs if r["status"] == "customer"),
+        "customers": len(customers),
+        # The customers a per-click rate can compare: all of them when the click history was
+        # imported, otherwise only those who arrived through a tracked click.
+        "customers_from_clicks": len(customers) if aff.get("imported_clicks") else sum(1 for r in customers if isinstance(r.get("click_id"), str)),
         "totals": totals,
         "commissions": [
             {
@@ -299,6 +324,7 @@ async def pipeline(db, aff: dict) -> dict:
                 "paid_at": c.get("paid_at"),
                 "created_at": c["created_at"],
                 "void_reason": c.get("void_reason"),
+                "customer": _customer(by_id.get(c.get("referral_id")), for_merchant),
             }
             for c in commissions[:200]
         ],
@@ -307,3 +333,11 @@ async def pipeline(db, aff: dict) -> dict:
             async for r in db.rewards.find({"affiliate_id": aff["_id"], "recipient": "affiliate", "status": {"$ne": "void"}}).sort("created_at", -1).limit(200)
         ],
     }
+
+
+def _customer(r: dict | None, for_merchant: bool) -> dict | None:
+    if not r:
+        return None
+    if for_merchant:
+        return {"referral_id": r["_id"], "email": r.get("email")}
+    return {"email": mask_email(r.get("email"))}

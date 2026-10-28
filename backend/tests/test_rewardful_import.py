@@ -9,7 +9,8 @@ import pytest
 from app import deps
 from app.main import app
 from app.services.payouts import payable
-from app.services.rewardful_import import RewardfulError, RewardfulNotFound, backfill_links
+from app.services.affiliates import pipeline
+from app.services.rewardful_import import RewardfulError, RewardfulNotFound, backfill_links, backfill_visitors
 
 
 def auth(token):
@@ -270,6 +271,51 @@ async def test_backfill_links_touches_only_the_link(client, db, rewardful):
     assert after["referrals"] == before["referrals"]
     # Running it again changes nothing.
     assert (await backfill_links(db, mid, FakeRewardful("sk_live_rewardful_1")))["updated"] == 0
+
+
+async def test_backfill_visitors_gives_clicks_a_history(client, db, rewardful):
+    from datetime import UTC, datetime, timedelta
+
+    h = auth(await signup(client, db, "owner5@rwco.example", "Vic"))
+    mid = (await client.post("/merchant", json={"name": "Visits", "website": "https://rwco.example"}, headers=h)).json()["merchant"]["id"]
+    await db.merchants.update_one({"_id": mid}, {"$set": {"plan": {"id": "growth"}}})
+    await client.post("/merchant/import/rewardful", json={"api_secret": "sk_live_rewardful_1", "only": ["a-1", "a-2"]}, headers=h)
+    assert (await wait(client, h))["status"] == "done"
+    ann = await db.affiliates.find_one({"merchant_id": mid, "rewardful_id": "a-1"})
+    # Both trackers ran for a while: Kickrail's clicks from then are already in Rewardful's total.
+    before = datetime.now(UTC) - timedelta(days=3)
+    await db.clicks.insert_many([{"_id": f"clk_v{i}", "merchant_id": mid, "affiliate_id": ann["_id"], "test": False, "created_at": before} for i in range(5)])
+    p = await pipeline(db, ann)
+    assert p["clicks"] == 5 and p["customers"] == 2 and p["customers_from_clicks"] == 0
+
+    AFFILIATES[0]["visitors"], AFFILIATES[1]["visitors"] = 40, 0
+    try:
+        counts = await backfill_visitors(db, mid, FakeRewardful("sk_live_rewardful_1"))
+        assert counts["updated"] == 1 and counts["no_visitors"] == len(AFFILIATES) - 1
+        # Already set: a second run leaves it, --force refreshes it.
+        assert (await backfill_visitors(db, mid, FakeRewardful("sk_live_rewardful_1")))["updated"] == 0
+    finally:
+        AFFILIATES[0].pop("visitors"), AFFILIATES[1].pop("visitors")
+    await db.clicks.insert_one({"_id": "clk_vnew", "merchant_id": mid, "affiliate_id": ann["_id"], "test": False, "created_at": datetime.now(UTC) + timedelta(seconds=1)})
+
+    ann = await db.affiliates.find_one({"_id": ann["_id"]})
+    p = await pipeline(db, ann)
+    assert p["clicks"] == 41 and p["clicks_30d"] == 1 and p["customers_from_clicks"] == 2
+    # The affiliate sees whom each commission was for, masked; the merchant gets the referral.
+    seen = {c["customer"]["email"] for c in p["commissions"] if c["customer"]}
+    assert seen <= {"fr***@buyer.example", "kn***@buyer.example"} and seen
+    view = (await client.get(f"/merchant/affiliates/{ann['_id']}/view", headers=h)).json()
+    c = next(c for c in view["commissions"] if c["customer"])
+    assert c["customer"]["referral_id"].startswith("ref_") and "***" not in c["customer"]["email"]
+    assert view["clicks"] == 41
+
+    o = (await client.get("/merchant/overview", headers=h)).json()
+    assert o["clicks"] == 41
+    bob_refs = await db.referrals.count_documents({"merchant_id": mid, "affiliate_id": {"$ne": ann["_id"]}})
+    assert o["imported_leads"] == bob_refs and o["leads_from_clicks"] == o["leads"] - bob_refs
+    rows = (await client.get("/merchant/affiliates", headers=h)).json()
+    rows = rows["items"] if isinstance(rows, dict) else rows
+    assert next(r for r in rows if r["id"] == ann["_id"])["clicks"] == 41
 
 
 async def test_exports(client, db, rewardful):
