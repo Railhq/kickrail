@@ -621,11 +621,13 @@ async def backfill_visitors(db: AsyncDatabase, merchant_id: str, api: "Rewardful
                 if visitors <= 0:
                     counts["no_visitors"] += 1
                     continue
-                q = {"merchant_id": merchant_id, "rewardful_id": a["id"], **({} if force else {"imported_clicks": {"$exists": False}})}
+                # Affiliates added over the API keep the Rewardful id in metadata instead.
+                who = {"merchant_id": merchant_id, "$or": [{"rewardful_id": a["id"]}, {"metadata.rewardful_id": a["id"]}]}
+                q = {**who, **({} if force else {"imported_clicks": {"$exists": False}})}
                 res = await db.affiliates.update_one(q, {"$set": {"imported_clicks": visitors, "imported_clicks_at": at}})
                 if res.matched_count:
                     counts["updated"] += res.modified_count
-                elif not await db.affiliates.find_one({"merchant_id": merchant_id, "rewardful_id": a["id"]}, {"_id": 1}):
+                elif not await db.affiliates.find_one(who, {"_id": 1}):
                     counts["not_in_kickrail"] += 1
     return counts
 
