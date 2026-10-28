@@ -25,8 +25,10 @@ _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)  # one per
 
 
 class FakeRailhq:
-    def __init__(self, client_id: str, issuer: str = "https://accounts.railhq.test"):
+    def __init__(self, client_id: str, issuer: str = "https://accounts.railhq.test", existing_apps: tuple[str, ...] = ("Seorail",)):
         self.client_id, self.issuer = client_id, issuer
+        # The tools named in a 409 "exists" answer on signup; set it to test your own wording.
+        self.existing_apps = list(existing_apps)
         self.users: dict[str, dict] = {}
         self.orgs: dict[str, list] = {}
         self.codes: dict[str, dict] = {}
@@ -92,7 +94,7 @@ class FakeRailhq:
             return httpx.Response(200, json={"id_token": idt, "access_token": self.access_token(u["sub"]), "token_type": "Bearer", "expires_in": 3600})
         if path == "/api/signup":
             if self.by_email(body["email"]):
-                return httpx.Response(409, json={"detail": {"code": "exists", "message": "a Railhq account with this email already exists", "apps": ["Seorail"]}})
+                return httpx.Response(409, json={"detail": {"code": "exists", "message": "a Railhq account with this email already exists", "apps": self.existing_apps}})
             u = self.users[self.add_user(body["email"], body["password"], body.get("name", ""), verified=False)["sub"]]
             return httpx.Response(201, json=self._who(u))
         if path == "/api/login":
