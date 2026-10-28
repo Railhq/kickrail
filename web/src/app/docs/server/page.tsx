@@ -106,7 +106,7 @@ requests.post(
       <P>Pass one of <C>email</C>, <C>user_id</C> or <C>stripe_customer_id</C>. Lookup works on every plan.</P>
 
       <H2>After signup</H2>
-      <P>You don&apos;t report payments. Kickrail receives your Stripe webhooks and matches each <C>invoice.paid</C> and paid <C>checkout.session.completed</C> to the referral by Stripe customer, then by email. Refunds and disputes are handled the same way. See <Link className="link" href="/docs/commissions">Campaigns and commissions</Link>.</P>
+      <P>You don&apos;t report payments. Kickrail receives your Stripe webhooks and matches each <C>invoice.paid</C>, paid <C>checkout.session.completed</C> and <C>payment_intent.succeeded</C> (one-off payments made with Stripe Elements) to the referral by Stripe customer, then by email. Refunds and disputes are handled the same way. See <Link className="link" href="/docs/commissions">Campaigns and commissions</Link>.</P>
       <Note title="Order of signals">
         When several signals arrive, Kickrail trusts them in this order: the click id, the link token, a Stripe promotion code redeemed at checkout, then a creator code typed at signup. Only approved affiliates are credited.
       </Note>
