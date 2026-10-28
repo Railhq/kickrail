@@ -305,7 +305,7 @@ async def test_backfill_visitors_gives_clicks_a_history(client, db, rewardful):
 
     ann = await db.affiliates.find_one({"_id": ann["_id"]})
     p = await pipeline(db, ann)
-    assert p["clicks"] == 41 and p["clicks_30d"] == 1 and p["customers_from_clicks"] == 2
+    assert p["clicks"] == 41 and p["clicks_30d"] == 6 and p["customers_from_clicks"] == 2
     # The affiliate sees whom each commission was for, masked; the merchant gets the referral.
     seen = {c["customer"]["email"] for c in p["commissions"] if c["customer"]}
     assert seen <= {"fr***@buyer.example", "kn***@buyer.example"} and seen

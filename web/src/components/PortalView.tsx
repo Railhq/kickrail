@@ -170,9 +170,9 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
       )}
 
       <StatGroup>
-        <Stat label="Clicks" value={d.clicks} hint={`${d.clicks_30d} in the last 30 days`} />
-        <Stat label="Signups" value={d.leads} />
-        <Stat label="Customers" value={d.customers} />
+        <Stat label="Clicks" value={d.clicks.toLocaleString()} hint={`${d.clicks_30d.toLocaleString()} in the last 30 days`} />
+        <Stat label="Signups" value={d.leads.toLocaleString()} />
+        <Stat label="Customers" value={d.customers.toLocaleString()} />
         <Stat label="Conversion" value={d.clicks ? `${((d.customers_from_clicks / d.clicks) * 100).toFixed(1)}%` : "–"} hint="customers per click" />
       </StatGroup>
 
