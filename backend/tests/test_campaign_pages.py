@@ -7,9 +7,10 @@ def auth(token):
     return {"authorization": f"Bearer {token}"}
 
 
-async def signup(client, db, email, name):
-    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
-    await db.users.update_one({"email": email}, {"$set": {"email_verified": True}})
+async def signup(client, db, email, name, partner=False):
+    # Affiliates sign up on the portal: their own login, separate from the dashboard's.
+    r = await client.post("/partner/auth/signup" if partner else "/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
+    await db["partners" if partner else "users"].update_one({"email": email}, {"$set": {"email_verified": True}})
     return r.json()["token"]
 
 
@@ -33,7 +34,7 @@ async def test_public_campaign_has_a_join_page(client, db, prog):
     # The main join page still describes the default campaign.
     assert (await client.get("/programs/pageco")).json()["campaign"] is None
 
-    aff_token = await signup(client, db, "ann@pages.example", "Ann")
+    aff_token = await signup(client, db, "ann@pages.example", "Ann", partner=True)
     a = (await client.post("/programs/pageco/join", json={"campaign": "partners"}, headers=auth(aff_token))).json()
     assert a["campaign_id"] == c["id"]
     view = (await client.get(f"/portal/{a['id']}", headers=auth(aff_token))).json()
@@ -53,7 +54,7 @@ async def test_private_campaigns_and_bad_input(client, db, prog):
     assert r.json()["public"] is False and r.json()["join_url"] is None and r.json()["slug"] is None
     await client.put(f"/merchant/campaigns/{r.json()['id']}", json={**CAMP, "name": "VIP", "slug": "vip"}, headers=h)
     assert (await client.get("/programs/pageco/campaigns/vip")).status_code == 404
-    bob = await signup(client, db, "bob@pages.example", "Bob")
+    bob = await signup(client, db, "bob@pages.example", "Bob", partner=True)
     assert (await client.post("/programs/pageco/join", json={"campaign": "vip"}, headers=auth(bob))).status_code == 404
     # Plain joins still go to the default campaign.
     a = (await client.post("/programs/pageco/join", json={}, headers=auth(bob))).json()
@@ -69,7 +70,7 @@ async def test_adding_a_coupon_makes_existing_codes_redeemable(client, db, prog,
     h = auth(prog["token"])
     assert (await client.post("/merchant/stripe", json={"restricted_key": "rk_test_pageco"}, headers=h)).status_code == 200
     c = (await client.post("/merchant/campaigns", json={**CAMP, "name": "Creators"}, headers=h)).json()
-    cat = await signup(client, db, "cat@pages.example", "Cat")
+    cat = await signup(client, db, "cat@pages.example", "Cat", partner=True)
     a = (await client.post("/programs/pageco/join", json={}, headers=auth(cat))).json()
     r = await client.patch(f"/merchant/affiliates/{a['id']}", json={"campaign_id": c["id"], "status": "approved", "code": "catcast"}, headers=h)
     assert r.status_code == 200 and not (await db.affiliates.find_one({"_id": a["id"]})).get("stripe_promotion_code_id")
@@ -91,7 +92,7 @@ async def test_swapping_the_coupon_moves_codes_and_old_codes_still_attribute(cli
     h = auth(prog["token"])
     assert (await client.post("/merchant/stripe", json={"restricted_key": "rk_test_pageco"}, headers=h)).status_code == 200
     c = (await client.post("/merchant/campaigns", json={**CAMP, "name": "Creators", "stripe_coupon_id": "coupon_15"}, headers=h)).json()
-    dog = await signup(client, db, "dog@pages.example", "Dog")
+    dog = await signup(client, db, "dog@pages.example", "Dog", partner=True)
     a = (await client.post("/programs/pageco/join", json={}, headers=auth(dog))).json()
     await client.patch(f"/merchant/affiliates/{a['id']}", json={"campaign_id": c["id"], "status": "approved", "code": "dogcast"}, headers=h)
     await client.post(f"/merchant/affiliates/{a['id']}/codes", json={"code": "dogpod"}, headers=h)

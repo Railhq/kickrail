@@ -87,7 +87,7 @@ async def platform_webhook(request: Request, db=Depends(db_dep), factory=Depends
             return handled
         elif event["type"] == "account.updated":
             enabled = bool(obj.get("payouts_enabled")) and (obj.get("capabilities") or {}).get("transfers") == "active"
-            res = await db.users.update_one({"connect_account_id": obj["id"]}, {"$set": {"payouts_enabled": enabled}})
+            res = await db.partners.update_one({"connect_account_id": obj["id"]}, {"$set": {"payouts_enabled": enabled}})
             return f"payouts_enabled={enabled}" if res.matched_count else "unknown account"
         else:
             return "ignored"

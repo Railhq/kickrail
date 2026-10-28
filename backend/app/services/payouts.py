@@ -53,7 +53,7 @@ async def payable(db: AsyncDatabase, merchant_id: str, now: datetime | None = No
     commissions = await db.commissions.find({"merchant_id": merchant_id, "status": "pending", "payout_id": {"$exists": False}}).to_list(None)
     affiliates = {a["_id"]: a async for a in db.affiliates.find({"merchant_id": merchant_id, "_id": {"$in": list({c["affiliate_id"] for c in commissions})}})}
     campaigns = {c["_id"]: c async for c in db.campaigns.find({"merchant_id": merchant_id})}
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affiliates.values()]}})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": [a["user_id"] for a in affiliates.values()]}})}
 
     def min_payout(aff_id: str) -> int:
         aff = affiliates.get(aff_id)
@@ -103,7 +103,7 @@ async def upcoming(db: AsyncDatabase, merchant_id: str, now: datetime | None = N
         elif row["next_due_at"] is None or due_at < row["next_due_at"]:
             row["next_due_at"] = due_at
     affiliates = {a["_id"]: a["user_id"] async for a in db.affiliates.find({"_id": {"$in": list(rows)}}, {"user_id": 1})}
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": list(affiliates.values())}}, {"name": 1, "email": 1})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": list(affiliates.values())}}, {"name": 1, "email": 1})}
     for row in rows.values():
         user = users.get(affiliates.get(row["affiliate_id"]), {})
         row |= {"name": user.get("name", ""), "email": user.get("email", "")}
@@ -290,7 +290,7 @@ async def complete_funded_payout(db: AsyncDatabase, payout_id: str, session_id: 
     if not payout:
         return "not awaiting funding"
     charge_id = await platform.charge_for_session(session_id)
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [i["user_id"] for i in payout["items"]]}})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": [i["user_id"] for i in payout["items"]]}})}
     items, failures, now = [], 0, datetime.now(UTC)
     for item in payout["items"]:
         user = users.get(item["user_id"], {})

@@ -18,10 +18,11 @@ def auth(token):
     return {"authorization": f"Bearer {token}"}
 
 
-async def signup(client, email, name):
-    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": name}, headers={"x-forwarded-for": f"10.0.0.{len(S) + 1}"})
+async def signup(client, email, name, partner=False):
+    # Affiliates sign up on the portal: their own login, separate from the dashboard's.
+    r = await client.post("/partner/auth/signup" if partner else "/auth/signup", json={"email": email, "password": "correct-horse", "name": name}, headers={"x-forwarded-for": f"10.0.0.{len(S) + 1}"})
     assert r.status_code == 200, r.text
-    await (await get_db()).users.update_one({"email": email}, {"$set": {"email_verified": True}})  # as if they clicked the link
+    await (await get_db())["partners" if partner else "users"].update_one({"email": email}, {"$set": {"email_verified": True}})  # as if they clicked the link
     return r.json()["token"]
 
 
@@ -59,7 +60,7 @@ async def test_merchant_setup(client, fakes):
 
 
 async def test_affiliate_joins_with_one_account(client, fakes):
-    S["aff"] = await signup(client, "creator@youtube.example", "Jane Creator")
+    S["aff"] = await signup(client, "creator@youtube.example", "Jane Creator", partner=True)
     prog = (await client.get("/programs/acme")).json()
     assert prog["terms"] == "30% of every payment for 12 months"
     r = await client.post("/programs/acme/join", json={}, headers=auth(S["aff"]))
@@ -134,7 +135,7 @@ async def test_partial_refund_shrinks_unpaid_commission(client, db):
 
 
 async def test_first_referral_wins(client, db):
-    other = await signup(client, "rival@example.org", "Rival")
+    other = await signup(client, "rival@example.org", "Rival", partner=True)
     rival = (await client.post("/programs/acme/join", json={}, headers=auth(other))).json()
     await client.post("/track/click", content=f'{{"key":"{S["pk"]}","id":"kr_rivalclick000000001","token":"{rival["token"]}"}}')
     r = await client.post("/v1/referrals", json={"referral": "kr_rivalclick000000001", "email": "buyer@bigco.com"}, headers=auth(S["sk"]))
@@ -257,8 +258,8 @@ async def test_overview_and_tenant_isolation(client):
     assert o["affiliates"] == 2 and o["customers"] == 3 and o["installed"]
     # Only signups with a tracked click count toward the click rate.
     assert 0 < o["leads_from_clicks"] < o["leads"] and o["imported_leads"] == 0
-    # The affiliate has no merchant workspace and can't read Acme's data
-    assert (await client.get("/merchant/commissions", headers=auth(S["aff"]))).status_code == 404
+    # The affiliate's session is a portal one: it doesn't open the dashboard at all
+    assert (await client.get("/merchant/commissions", headers=auth(S["aff"]))).status_code == 401
 
 
 async def test_referral_search_pages_and_detail(client, db):
@@ -276,7 +277,7 @@ async def test_referral_search_pages_and_detail(client, db):
     assert d["click"]["landing_url"].startswith("https://acme.io/") and "ip_hash" not in d["click"] and "user_agent" not in d["click"]
     assert d["commissions"] and all(c["referral_id"] == S["ref_id"] for c in d["commissions"])
     assert (await client.get("/merchant/referrals/ref_nope", headers=h)).status_code == 404
-    assert (await client.get(f"/merchant/referrals/{S['ref_id']}", headers=auth(S["aff"]))).status_code == 404
+    assert (await client.get(f"/merchant/referrals/{S['ref_id']}", headers=auth(S["aff"]))).status_code == 401
 
     c = (await client.get("/merchant/commissions?q=buyer@bigco", headers=h)).json()
     assert c["total"] >= 1 and all(x["customer"] == "buyer@bigco.com" for x in c["items"])
@@ -341,7 +342,7 @@ async def test_money_actions_are_audited(client, db):
     rows = (await client.get(f"/merchant/audit?target={S['aff_id']}", headers=auth(S["owner"]))).json()
     assert [r["action"] for r in rows][:2] == ["affiliate.approved", "affiliate.rejected"] and rows[0]["detail"]["previous"] == "rejected"
     # Affiliates can't read the program's log.
-    assert (await client.get("/merchant/audit", headers=auth(S["aff"]))).status_code == 404
+    assert (await client.get("/merchant/audit", headers=auth(S["aff"]))).status_code == 401
 
 
 async def test_outbox_rows_commit_with_the_write(db):
@@ -405,7 +406,7 @@ async def test_last_touch_moves_an_unpaid_referral(client, db, fakes):
     from app.services.referrals import AttachInput, attach_referral
     from app.services.stripe_sync import sync_customers
 
-    other = await signup(client, "second@example.com", "Sam Second")
+    other = await signup(client, "second@example.com", "Sam Second", partner=True)
     b = (await client.post("/programs/acme/join", json={}, headers=auth(other))).json()
     m = await db.merchants.find_one({"_id": S["merchant_id"]})
     first, _ = await attach_referral(db, m, AttachInput(token=S["token"], email="touch@example.com", stripe_customer_id="cus_touch"))

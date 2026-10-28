@@ -46,7 +46,7 @@ DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_appr
 
 def plan_summary(m: dict, plan: dict | None = None) -> dict:
     plan = plan or plans.current(m)
-    keep = ("id", "name", "status", "comped", "trial_ends_at", "interval", "current_period_end", "cancel_at_period_end", "subscribed", "revenue_cap", "branding")
+    keep = ("id", "name", "status", "source", "comped", "trial_ends_at", "interval", "current_period_end", "cancel_at_period_end", "subscribed", "revenue_cap", "branding")
     usage = m.get("usage") or {}
     return {k: plan.get(k) for k in keep} | {
         "over_limit": bool(usage.get("over_limit")) and not plan["comped"],
@@ -120,6 +120,8 @@ async def create_merchant(body: MerchantIn, user=Depends(current_user), db=Depen
         "plan": plans.new_trial(now),
         "created_at": now,
     }
+    if user.get("railhq_pass"):
+        merchant["railhq_pass"] = True
     for attempt in range(5):
         merchant["slug"] = base if attempt == 0 else f"{base}-{random_id(4).lower()}"
         try:
@@ -784,7 +786,7 @@ async def _affiliate_stats(db, merchant_id: str, affiliate_ids: list[str]) -> di
 
 async def _affiliate_rows(db, m: dict, affs: list[dict]) -> list[dict]:
     ids = [a["_id"] for a in affs]
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": [a["user_id"] for a in affs]}})}
     stats = await _affiliate_stats(db, m["_id"], ids)
     campaigns = {c["_id"]: c async for c in db.campaigns.find({"merchant_id": m["_id"]}, {"landing_url": 1, "name": 1})}
     links: dict[str, list] = {}
@@ -934,7 +936,7 @@ async def _aff(db, m: dict, affiliate_id: str) -> dict:
 async def view_as_affiliate(affiliate_id: str, m=Depends(current_merchant), db=Depends(db_dep)):
     """Exactly what this affiliate sees in their portal, for support and checking setup."""
     aff = await _aff(db, m, affiliate_id)
-    user = await db.users.find_one({"_id": aff["user_id"]}) or {}
+    user = await db.partners.find_one({"_id": aff["user_id"]}) or {}
     return {**await affiliate_view(db, m, aff, user, for_merchant=True), "affiliate": {"name": user.get("name", ""), "email": user.get("email", "")}}
 
 
@@ -998,7 +1000,7 @@ async def _page(coll, query: dict, page: int) -> tuple[list[dict], int]:
 async def _matching_affiliates(db, merchant_id: str, rx: dict) -> list[str]:
     """Affiliates whose name, email or link name matches, for searching their referrals and commissions."""
     affs = await db.affiliates.find({"merchant_id": merchant_id}, {"user_id": 1, "token": 1}).to_list(None)
-    users = {u["_id"] async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}, "$or": [{"name": rx}, {"email": rx}]}, {"_id": 1})}
+    users = {u["_id"] async for u in db.partners.find({"_id": {"$in": [a["user_id"] for a in affs]}, "$or": [{"name": rx}, {"email": rx}]}, {"_id": 1})}
     tokens = {a["affiliate_id"] async for a in db.affiliate_links.find({"merchant_id": merchant_id, "token": rx}, {"affiliate_id": 1})}
     return [a["_id"] for a in affs if a["user_id"] in users or a["_id"] in tokens or re.search(rx["$regex"], a.get("token", ""), re.I)]
 
@@ -1032,7 +1034,7 @@ async def get_referral(referral_id: str, m=Depends(current_merchant), db=Depends
     if not r:
         raise HTTPException(404, "referral not found")
     aff = await db.affiliates.find_one({"_id": r["affiliate_id"], "merchant_id": m["_id"]}, {"user_id": 1, "token": 1})
-    user = aff and await db.users.find_one({"_id": aff["user_id"]}, {"name": 1, "email": 1})
+    user = aff and await db.partners.find_one({"_id": aff["user_id"]}, {"name": 1, "email": 1})
     campaign = r.get("campaign_id") and await db.campaigns.find_one({"_id": r["campaign_id"], "merchant_id": m["_id"]}, {"name": 1})
     # The visitor's IP hash and browser stay out: the merchant only needs where they came from.
     click = r.get("click_id") and await db.clicks.find_one({"_id": r["click_id"], "merchant_id": m["_id"]}, {"token": 1, "landing_url": 1, "referrer": 1, "created_at": 1})
@@ -1120,7 +1122,7 @@ async def delete_commission(commission_id: str, body: DeleteIn | None = None, m=
 
 async def _affiliate_names(db, merchant_id: str, ids) -> dict[str, str]:
     affs = await db.affiliates.find({"merchant_id": merchant_id, "_id": {"$in": list(set(ids))}}, {"user_id": 1}).to_list(None)
-    users = {u["_id"]: u["name"] async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}}, {"name": 1})}
+    users = {u["_id"]: u["name"] async for u in db.partners.find({"_id": {"$in": [a["user_id"] for a in affs]}}, {"name": 1})}
     return {a["_id"]: users.get(a["user_id"], "") for a in affs}
 
 
@@ -1379,7 +1381,7 @@ async def tax_forms(m=Depends(current_merchant), db=Depends(db_dep)):
     # if they were paid this year.
     custom = [c["_id"] async for c in db.campaigns.find({"merchant_id": m["_id"], "reward.type": "custom"}, {"_id": 1})]
     affs = await db.affiliates.find({"merchant_id": m["_id"], "status": {"$ne": "rejected"}, "$or": [{"campaign_id": {"$nin": custom}}, {"_id": {"$in": list(paid)}}]}).to_list(None)
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs]}})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": [a["user_id"] for a in affs]}})}
     rows = []
     for a in affs:
         u = users.get(a["user_id"], {})
@@ -1421,7 +1423,7 @@ async def tax_1099(year: int, m=Depends(current_merchant), user=Depends(current_
 
     paid = await _paid_by_affiliate(db, m["_id"], year)
     affs = {a["_id"]: a async for a in db.affiliates.find({"merchant_id": m["_id"], "_id": {"$in": list(paid)}})}
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in affs.values()]}})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": [a["user_id"] for a in affs.values()]}})}
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["legal_name", "business_name", "tin", "address", "email", "box1_nonemployee_compensation_usd", "affiliate_id"])
@@ -1454,7 +1456,7 @@ async def payout_csv(payout_id: str, m=Depends(current_merchant), db=Depends(db_
     payout = await db.payouts.find_one({"_id": payout_id, "merchant_id": m["_id"]})
     if not payout:
         raise HTTPException(404, "payout not found")
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [i["user_id"] for i in payout["items"]]}})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": [i["user_id"] for i in payout["items"]]}})}
     return Response(payout_svc.payout_csv(payout, users), media_type="text/csv", headers={"content-disposition": f'attachment; filename="{payout_id}.csv"'})
 
 

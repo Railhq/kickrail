@@ -79,7 +79,17 @@ async def close_db() -> None:
 async def ensure_indexes(db: AsyncDatabase) -> None:
     A, D = ASCENDING, DESCENDING
     specs = {
-        "users": [([("email", A)], {"unique": True}), ([("connect_account_id", A)], {"sparse": True})],
+        # People who run programs. railhq_id links one to their Railhq account.
+        "users": [([("email", A)], {"unique": True}), ([("connect_account_id", A)], {"sparse": True}), ([("railhq_id", A)], {"unique": True, "sparse": True})],
+        # Affiliates, one per email across every program they promote (affiliates.user_id is a
+        # partner id). Their own login, separate from users even for the same email.
+        "partners": [
+            ([("email", A)], {"unique": True}),
+            ([("connect_account_id", A)], {"sparse": True}),
+            ([("claim_token_hash", A)], {"sparse": True}),
+        ],
+        # Railhq sessions signed out by back-channel logout, kept until their tokens expire.
+        "railhq_signouts": [([("expires_at", A)], {"expireAfterSeconds": 0})],
         "merchants": [
             ([("slug", A)], {"unique": True}),
             ([("public_key", A)], {"unique": True}),

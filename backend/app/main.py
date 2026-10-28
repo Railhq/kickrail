@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from .config import get_settings
 from .db import close_db, get_db
-from .routers import assets, auth, billing, developers, mcp, merchant, portal, public, server_api, team, webhooks
+from .routers import assets, auth, billing, developers, mcp, merchant, partner_auth, portal, public, railhq, server_api, team, webhooks
 from .services.billing import check_limits
 from .services.outbox import run_dispatcher
 from .services.payouts import announce_due, poll_paypal
@@ -62,5 +62,5 @@ async def health():
     return {"ok": True}
 
 
-for r in (assets.router, auth.router, billing.router, developers.router, mcp.router, merchant.router, portal.router, public.router, server_api.router, team.router, webhooks.router):
+for r in (assets.router, auth.router, billing.router, developers.router, mcp.router, merchant.router, partner_auth.router, portal.router, public.router, railhq.router, server_api.router, team.router, webhooks.router):
     app.include_router(r)

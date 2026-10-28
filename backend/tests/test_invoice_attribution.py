@@ -17,9 +17,10 @@ def auth(token):
     return {"authorization": f"Bearer {token}"}
 
 
-async def signup(client, email, name):
-    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": name}, headers={"x-forwarded-for": f"10.0.9.{len(S) + 1}"})
-    await (await get_db()).users.update_one({"email": email}, {"$set": {"email_verified": True}})
+async def signup(client, email, name, partner=False):
+    # Affiliates sign up on the portal: their own login, separate from the dashboard's.
+    r = await client.post("/partner/auth/signup" if partner else "/auth/signup", json={"email": email, "password": "correct-horse", "name": name}, headers={"x-forwarded-for": f"10.0.9.{len(S) + 1}"})
+    await (await get_db())["partners" if partner else "users"].update_one({"email": email}, {"$set": {"email_verified": True}})
     return r.json()["token"]
 
 
@@ -38,7 +39,7 @@ async def test_setup(client):
     await client.post("/merchant/stripe", json={"restricted_key": "rk_test_subco"}, headers=auth(S["owner"]))
     camp = (await client.get("/merchant/campaigns", headers=auth(S["owner"]))).json()[0]
     await client.put(f"/merchant/campaigns/{camp['id']}", json={"name": "Default", "rule_type": "percent", "percent": 30, "duration_mode": "forever", "hold_days": 30, "min_payout_cents": 0, "stripe_coupon_id": "coupon_20"}, headers=auth(S["owner"]))
-    a = (await client.post("/programs/subco/join", json={}, headers=auth(await signup(client, "kim@creators.example", "Kim Creator")))).json()
+    a = (await client.post("/programs/subco/join", json={}, headers=auth(await signup(client, "kim@creators.example", "Kim Creator", partner=True)))).json()
     S["aff_id"], S["token"], S["code"] = a["id"], a["token"], a["code"]
 
 

@@ -3,7 +3,10 @@ merchant's own repo: install the script, set commissions, check it all works.
 
 Streamable HTTP, stateless: every request is one JSON-RPC message (or a batch)
 answered with plain JSON. Authenticated with the program's secret key
-(Authorization: Bearer sk_kr_...), the same key as the server API.
+(Authorization: Bearer sk_kr_...), the same key as the server API, or, with Railhq
+accounts on, a token from the Railhq MCP gateway for one operator: the program is the
+X-Railhq-Workspace header when they're on its team, else their oldest program, and
+`railhq/workspaces` lists the programs they can pick.
 """
 
 import asyncio
@@ -22,10 +25,12 @@ from pydantic import BaseModel, EmailStr, Field, ValidationError
 from .. import deps, plans
 from ..config import get_settings
 from ..ids import sha256
-from ..security import db_dep
+from ..railhq import RailhqError
+from ..security import db_dep, selected_merchant
 from ..services import audit
 from ..serializers import affiliate_url, join_url, portal_base
 from . import merchant as mr
+from . import railhq
 from . import server_api as api
 
 router = APIRouter(tags=["mcp"])
@@ -507,7 +512,14 @@ def _err(id_, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}
 
 
-async def handle(request: Request, db, m: dict, msg) -> dict | None:
+async def _workspaces(db, user: dict | None) -> dict:
+    if not user:
+        return {"workspaces": []}
+    found = await db.merchants.find({"member_ids": user["_id"]}, {"name": 1, "owner_id": 1}).sort("created_at", 1).to_list(None)
+    return {"workspaces": [{"id": m["_id"], "name": m["name"], "role": "owner" if m.get("owner_id") == user["_id"] else "member"} for m in found]}
+
+
+async def handle(request: Request, db, m: dict | None, msg, user: dict | None = None) -> dict | None:
     if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0" or not isinstance(msg.get("method"), str):
         return _err(msg.get("id") if isinstance(msg, dict) else None, -32600, "invalid request")
     method, id_, params = msg["method"], msg.get("id"), msg.get("params") or {}
@@ -519,10 +531,15 @@ async def handle(request: Request, db, m: dict, msg) -> dict | None:
             "protocolVersion": asked if asked in PROTOCOLS else PROTOCOLS[0],
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": "kickrail", "title": "Kickrail", "version": "1.0.0"},
-            "instructions": INSTRUCTIONS + f"\nThis key belongs to the program \"{m['name']}\" ({m['website']}).",
+            "instructions": INSTRUCTIONS + (f"\nThis key belongs to the program \"{m['name']}\" ({m['website']})." if m else ""),
         }}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": id_, "result": {}}
+    if method == "railhq/workspaces" and user:
+        return {"jsonrpc": "2.0", "id": id_, "result": await _workspaces(db, user)}
+    if not m:
+        # Signed in through Railhq but on no program's team yet.
+        return _err(id_, -32001, "This Railhq account doesn't run a Kickrail program yet. Set one up at kickrail.com first.")
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": id_, "result": {"tools": tool_list()}}
     if method == "tools/call":
@@ -534,25 +551,45 @@ async def handle(request: Request, db, m: dict, msg) -> dict | None:
     return _err(id_, -32601, f"method not found: {method}")
 
 
+async def _gateway(db, token: str, wanted: str | None) -> tuple[dict | None, dict | None]:
+    """(operator, program) for a token from the Railhq MCP gateway; (None, None) otherwise."""
+    if not token or not railhq.enabled():
+        return None, None
+    try:
+        claims = await railhq.client().verify_access_token(token)
+    except RailhqError:
+        return None, None
+    if (claims.get("act") or {}).get("sub") != "railhq-gateway":
+        return None, None
+    user = await db.users.find_one({"railhq_id": claims.get("sub")})
+    if not user:
+        return None, None
+    return user, await selected_merchant(db, user["_id"], wanted)
+
+
 @router.post("/mcp")
 async def mcp(request: Request):
     db = await db_dep()
     key = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-    m = await db.merchants.find_one({"secret_key_hash": sha256(key)}) if key.startswith("sk_kr_") else None
-    if not m:
+    user = None
+    if key.startswith("sk_kr_"):
+        m = await db.merchants.find_one({"secret_key_hash": sha256(key)})
+    else:
+        user, m = await _gateway(db, key, request.headers.get("x-railhq-workspace"))
+    if not m and not user:
         return JSONResponse(
             {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "Send your program's secret key as Authorization: Bearer sk_kr_... (Kickrail > Settings > Server API key)."}},
             status_code=401,
         )
-    audit.actor.set({"kind": "mcp"})
+    audit.actor.set({"kind": "mcp"} | ({"id": user["_id"], "email": user.get("email", ""), "via": "railhq"} if user else {}))
     try:
         body = json.loads(await request.body())
     except ValueError:
         return JSONResponse(_err(None, -32700, "parse error"), status_code=400)
     if isinstance(body, list):
-        replies = [r for r in [await handle(request, db, m, x) for x in body] if r]
+        replies = [r for r in [await handle(request, db, m, x, user) for x in body] if r]
         return JSONResponse(replies) if replies else Response(status_code=202)
-    reply = await handle(request, db, m, body)
+    reply = await handle(request, db, m, body, user)
     return JSONResponse(reply) if reply else Response(status_code=202)
 
 

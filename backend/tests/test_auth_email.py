@@ -22,7 +22,10 @@ async def test_signup_must_verify_before_using_the_app(client, db):
     # Signed in, but nothing else works yet.
     r = await client.post("/merchant", json={"name": "Vera Co", "website": "https://vera.example"}, headers=auth(tok))
     assert r.status_code == 403 and "verify your email" in r.json()["detail"]
-    assert (await client.get("/portal", headers=auth(tok))).status_code == 403
+    # The same holds on the affiliate side, which has its own login.
+    ptok = (await client.post("/partner/auth/signup", json={"email": "pia@verify.example", "password": "correct-horse", "name": "Pia", "next": "/join/acme"})).json()["token"]
+    assert (await client.get("/portal", headers=auth(ptok))).status_code == 403
+    assert (await client.get("/portal", headers=auth(tok))).status_code == 401  # a dashboard session isn't an affiliate one
 
     first = await link(db, "vera@verify.example", "verify_email")
     assert (await client.post("/auth/verify/resend", json={}, headers=auth(tok))).status_code == 429
@@ -50,6 +53,9 @@ async def test_expired_verify_link(client, db):
 async def test_accounts_from_before_verification_still_work(client, db):
     r = await client.post("/auth/signup", json={"email": "old@verify.example", "password": "correct-horse", "name": "Old"})
     await db.users.update_one({"email": "old@verify.example"}, {"$unset": {"email_verified": ""}})
+    assert (await client.post("/merchant", json={"name": "Old Co", "website": "https://old.example"}, headers=auth(r.json()["token"]))).status_code == 200
+    r = await client.post("/partner/auth/signup", json={"email": "old@verify.example", "password": "correct-horse", "name": "Old"})
+    await db.partners.update_one({"email": "old@verify.example"}, {"$unset": {"email_verified": ""}})
     assert (await client.get("/portal", headers=auth(r.json()["token"]))).status_code == 200
 
 
@@ -88,7 +94,7 @@ async def test_reset_takes_back_an_address_someone_else_signed_up_with(client, d
     token = await link(db, "sam@owner.example", "password_reset")
     sam = (await client.post("/auth/password/reset", json={"token": token, "password": "sams-own-pass"})).json()["token"]
     assert (await client.get("/auth/me", headers=auth(mallory))).status_code == 401
-    assert (await client.get("/portal", headers=auth(sam))).status_code == 200
+    assert (await client.post("/merchant", json={"name": "Sam Co", "website": "https://sam.example"}, headers=auth(sam))).status_code == 200
 
 
 async def test_links_open_on_the_portal_domain_they_came_from(client, db):

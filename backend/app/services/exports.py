@@ -50,7 +50,7 @@ async def _batches(cursor) -> AsyncIterator[list[dict]]:
 async def _emails(db: AsyncDatabase, affiliate_ids: set[str]) -> dict[str, dict]:
     """affiliate id -> {email, name}."""
     affs = {a["_id"]: a["user_id"] async for a in db.affiliates.find({"_id": {"$in": list(affiliate_ids)}}, {"user_id": 1})}
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": list(affs.values())}}, {"email": 1, "name": 1})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": list(affs.values())}}, {"email": 1, "name": 1})}
     return {aid: users.get(uid, {}) for aid, uid in affs.items()}
 
 
@@ -59,7 +59,7 @@ async def affiliates_csv(db: AsyncDatabase, m: dict) -> AsyncIterator[str]:
     campaigns = {c["_id"]: c async for c in db.campaigns.find({"merchant_id": m["_id"]}, {"name": 1, "landing_url": 1})}
     async for batch in _batches(db.affiliates.find({"merchant_id": m["_id"]}).sort("created_at", 1)):
         ids = [a["_id"] for a in batch]
-        users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [a["user_id"] for a in batch]}}, {"email": 1, "name": 1, "payout_details": 1})}
+        users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": [a["user_id"] for a in batch]}}, {"email": 1, "name": 1, "payout_details": 1})}
         links: dict[str, list[str]] = {}
         async for l in db.affiliate_links.find({"affiliate_id": {"$in": ids}}, {"affiliate_id": 1, "token": 1}):
             links.setdefault(l["affiliate_id"], []).append(l["token"])

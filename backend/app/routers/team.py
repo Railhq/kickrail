@@ -98,7 +98,9 @@ async def transfer_owner(body: OwnerIn, m=Depends(current_merchant), user=Depend
         raise HTTPException(400, "they already own this program")
 
     async def move(tdb) -> bool:
-        res = await tdb.merchants.update_one({"_id": m["_id"], "owner_id": user["_id"], "member_ids": body.user_id}, {"$set": {"owner_id": body.user_id}})
+        # The Railhq Pass lift belongs to whoever owns the program.
+        heir = await tdb.users.find_one({"_id": body.user_id}, {"railhq_pass": 1}) or {}
+        res = await tdb.merchants.update_one({"_id": m["_id"], "owner_id": user["_id"], "member_ids": body.user_id}, {"$set": {"owner_id": body.user_id, "railhq_pass": bool(heir.get("railhq_pass"))}})
         if not res.modified_count:
             return False
         await audit.record(tdb, m["_id"], "team.owner_changed", body.user_id, previous_owner=user["_id"])

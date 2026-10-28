@@ -17,9 +17,10 @@ def auth(token):
     return {"authorization": f"Bearer {token}"}
 
 
-async def signup(client, db, email, name):
-    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
-    await db.users.update_one({"email": email}, {"$set": {"email_verified": True}})
+async def signup(client, db, email, name, partner=False):
+    # Affiliates sign up on the portal: their own login, separate from the dashboard's.
+    r = await client.post("/partner/auth/signup" if partner else "/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
+    await db["partners" if partner else "users"].update_one({"email": email}, {"$set": {"email_verified": True}})
     return r.json()["token"]
 
 
@@ -101,7 +102,7 @@ async def test_connect_with_stripe(client, db, prog, oauth):
 
 async def test_auto_leads_only_take_new_customers(client, db, prog, oauth, fakes):
     m = (await client.get("/merchant", headers=auth(prog["token"]))).json()
-    aff_token = await signup(client, db, "aff@oauth.example", "Ava")
+    aff_token = await signup(client, db, "aff@oauth.example", "Ava", partner=True)
     aff = (await client.post("/programs/oauthco/join", json={}, headers=auth(aff_token))).json()
     token = (await db.affiliates.find_one({"_id": aff["id"]}))["token"]
 

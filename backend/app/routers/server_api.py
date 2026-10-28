@@ -93,7 +93,7 @@ async def page(coll, q: dict, limit: int, starting_after: str | None, shape) -> 
 
 async def _affiliate_shape(db, m: dict):
     async def shape(a: dict) -> dict:
-        user = await db.users.find_one({"_id": a["user_id"]})
+        user = await db.partners.find_one({"_id": a["user_id"]})
         links = await db.affiliate_links.find({"affiliate_id": a["_id"]}).sort("created_at", 1).to_list(None)
         codes = await db.affiliate_codes.find({"affiliate_id": a["_id"]}).sort("created_at", 1).to_list(None)
         campaign = await db.campaigns.find_one({"_id": a["campaign_id"]})
@@ -116,7 +116,7 @@ async def list_affiliates(
 ):
     q: dict = {"merchant_id": m["_id"]} | ({"status": status} if status else {}) | ({"campaign_id": campaign_id} if campaign_id else {})
     if email:
-        u = await db.users.find_one({"email": email.strip().lower()}, {"_id": 1})
+        u = await db.partners.find_one({"email": email.strip().lower()}, {"_id": 1})
         q["user_id"] = u["_id"] if u else "-"
     return await page(db.affiliates, q, limit, starting_after, await _affiliate_shape(db, m))
 
