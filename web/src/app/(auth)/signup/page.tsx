@@ -2,12 +2,14 @@ import Link from "next/link";
 import { signup } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { Field } from "@/components/ui";
+import { partnerContext } from "@/lib/backend";
 
 export const metadata = { title: "Create account" };
 
 export default async function Signup({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const { next = "" } = await searchParams;
-  const joining = next.startsWith("/join/");
+  // The affiliate login (a join link, or a program's portal domain).
+  const joining = await partnerContext(next);
   return (
     <>
       <h1 className="font-display text-3xl tracking-tight">{joining ? "Create your affiliate account" : "Create your account"}</h1>

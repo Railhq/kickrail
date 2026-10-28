@@ -10,9 +10,10 @@ def auth(token):
     return {"authorization": f"Bearer {token}"}
 
 
-async def signup(client, db, email, name):
-    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
-    await db.users.update_one({"email": email}, {"$set": {"email_verified": True}})
+async def signup(client, db, email, name, partner=False):
+    # Affiliates sign up on the portal: their own login, separate from the dashboard's.
+    r = await client.post("/partner/auth/signup" if partner else "/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
+    await db["partners" if partner else "users"].update_one({"email": email}, {"$set": {"email_verified": True}})
     return r.json()["token"]
 
 
@@ -21,7 +22,7 @@ async def test_payout_due_then_record_payout(client, db):
     r = (await client.post("/merchant", json={"name": "Dueco", "website": "https://dueco.example"}, headers=auth(owner))).json()
     mid, sk = r["merchant"]["id"], {"authorization": f"Bearer {r['secret_key']}"}
     assert (await client.post("/merchant/webhooks", json={"url": "https://hooks.globex.com/due", "events": ["payout.due"]}, headers=auth(owner))).status_code == 200
-    aff_token = await signup(client, db, "friend@due.example", "Fay")
+    aff_token = await signup(client, db, "friend@due.example", "Fay", partner=True)
     aff = (await client.post("/programs/dueco/join", json={}, headers=auth(aff_token))).json()
     camp = (await db.affiliates.find_one({"_id": aff["id"]}))["campaign_id"]
     await db.affiliates.update_one({"_id": aff["id"]}, {"$set": {"status": "approved", "metadata": {"user_id": "u_42"}}})

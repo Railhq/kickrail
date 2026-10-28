@@ -101,19 +101,19 @@ async def add_by_email(db: AsyncDatabase, m: dict, email: str, name: str, factor
     """The merchant adds someone (dashboard or API). People without a Kickrail account
     get one with no password; the welcome email carries a one-time link to set it."""
     email = email.strip().lower()
-    user = await db.users.find_one({"email": email})
+    user = await db.partners.find_one({"email": email})
     claim_url = None
     if not user or (not user.get("password_hash") and user.get("created_via") == m["_id"]):
         token = random_id(32)
         claim_url = f"{portal_base(m)}/claim?token={token}"
         if user:
-            await db.users.update_one({"_id": user["_id"]}, {"$set": {"claim_token_hash": sha256(token)}})
+            await db.partners.update_one({"_id": user["_id"]}, {"$set": {"claim_token_hash": sha256(token)}})
         else:
-            user = {"_id": new_id("usr"), "email": email, "name": name.strip(), "ip_hashes": [], "claim_token_hash": sha256(token), "created_via": m["_id"], "created_at": datetime.now(UTC)}
+            user = {"_id": new_id("ptn"), "email": email, "name": name.strip(), "ip_hashes": [], "claim_token_hash": sha256(token), "created_via": m["_id"], "created_at": datetime.now(UTC)}
             try:
-                await db.users.insert_one(user)
+                await db.partners.insert_one(user)
             except DuplicateKeyError:
-                user, claim_url = await db.users.find_one({"email": email}), None
+                user, claim_url = await db.partners.find_one({"email": email}), None
     return await create_affiliate(db, m, user, factory, claim_url=claim_url, **kw)
 
 

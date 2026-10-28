@@ -4,12 +4,12 @@ import { createWorkspace } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { Logo } from "@/components/Logo";
 import { Field } from "@/components/ui";
-import { getMe } from "@/lib/me";
+import { affiliations, getMe } from "@/lib/me";
 
 export const metadata = { title: "Set up your program" };
 
 export default async function Onboarding({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
-  const me = await getMe("/onboarding");
+  const [me, promoting] = await Promise.all([getMe("/onboarding"), affiliations()]);
   const another = (await searchParams).new !== undefined && me.merchants.length > 0;
   if (me.merchant && !another) redirect("/dashboard");
   return (
@@ -28,7 +28,7 @@ export default async function Onboarding({ searchParams }: { searchParams: Promi
         </div>
       </ActionForm>
       <p className="mt-6 text-sm text-muted">
-        Here to promote someone else&apos;s product? Open the join link they gave you{me.affiliations ? <>, or go to <Link className="link" href="/a">your programs</Link></> : ""}.
+        Here to promote someone else&apos;s product? Open the join link they gave you{promoting ? <>, or go to <Link className="link" href="/a">your programs</Link></> : ""}.
       </p>
     </div>
   );

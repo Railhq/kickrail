@@ -253,17 +253,17 @@ class Run:
     async def _user(self, email: str, name: str, paypal: str | None) -> dict:
         """People new to Kickrail get an account with no password."""
         db, m = self.db, self.m
-        user = await db.users.find_one({"email": email})
+        user = await db.partners.find_one({"email": email})
         if not user:
-            user = {"_id": new_id("usr"), "email": email, "name": name, "ip_hashes": [], "created_via": m["_id"], "created_at": datetime.now(UTC)}
+            user = {"_id": new_id("ptn"), "email": email, "name": name, "ip_hashes": [], "created_via": m["_id"], "created_at": datetime.now(UTC)}
             if paypal:
                 user["payout_details"] = {"method": "paypal", "value": paypal}
             try:
-                await db.users.insert_one(user)
+                await db.partners.insert_one(user)
             except DuplicateKeyError:
-                return await db.users.find_one({"email": email})
+                return await db.partners.find_one({"email": email})
         elif paypal and not user.get("payout_details") and user.get("created_via") == m["_id"]:
-            await db.users.update_one({"_id": user["_id"]}, {"$set": {"payout_details": {"method": "paypal", "value": paypal}}})
+            await db.partners.update_one({"_id": user["_id"]}, {"$set": {"payout_details": {"method": "paypal", "value": paypal}}})
         return user
 
     async def _claim(self, aff: dict, user: dict):
@@ -272,7 +272,7 @@ class Run:
         if not self.send_claims or aff["status"] != "approved" or user.get("password_hash") or user.get("created_via") != m["_id"] or user.get("claim_sent_for") == m["_id"]:
             return
         token = random_id(32)
-        await db.users.update_one({"_id": user["_id"]}, {"$set": {"claim_token_hash": sha256(token), "claim_sent_for": m["_id"]}})
+        await db.partners.update_one({"_id": user["_id"]}, {"$set": {"claim_token_hash": sha256(token), "claim_sent_for": m["_id"]}})
         await notify.claim_invite(db, m, aff, user, f"{portal_base(m)}/claim?token={token}")
 
     async def _free_token(self, token: str, aff_id: str | None) -> bool:

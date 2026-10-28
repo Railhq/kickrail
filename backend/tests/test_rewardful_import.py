@@ -17,9 +17,10 @@ def auth(token):
     return {"authorization": f"Bearer {token}"}
 
 
-async def signup(client, db, email, name):
-    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
-    await db.users.update_one({"email": email}, {"$set": {"email_verified": True}})
+async def signup(client, db, email, name, partner=False):
+    # Affiliates sign up on the portal: their own login, separate from the dashboard's.
+    r = await client.post("/partner/auth/signup" if partner else "/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
+    await db["partners" if partner else "users"].update_one({"email": email}, {"$set": {"email_verified": True}})
     return r.json()["token"]
 
 
@@ -134,7 +135,7 @@ async def test_import_from_rewardful(client, db, rewardful):
     h = auth(owner)
     mid = (await client.post("/merchant", json={"name": "Rwco", "website": "https://rwco.example"}, headers=h)).json()["merchant"]["id"]
     await db.merchants.update_one({"_id": mid}, {"$set": {"plan": {"id": "free"}}})
-    kept = await signup(client, db, "kept@rw.example", "Kept")
+    kept = await signup(client, db, "kept@rw.example", "Kept", partner=True)
     kept_aff = (await client.post("/programs/rwco/join", json={}, headers=auth(kept))).json()
     # A customer Kickrail already tracked keeps the affiliate Kickrail gave them.
     await db.referrals.insert_one({"_id": "ref_known", "merchant_id": mid, "affiliate_id": kept_aff["id"], "campaign_id": "x", "status": "customer", "stripe_customer_id": "cus_known", "flags": []})
@@ -160,7 +161,7 @@ async def test_import_from_rewardful(client, db, rewardful):
     assert await db.campaigns.count_documents({"merchant_id": mid}) == 1
 
     ann = await db.affiliates.find_one({"merchant_id": mid, "rewardful_id": "a-1"})
-    ann_user = await db.users.find_one({"_id": ann["user_id"]})
+    ann_user = await db.partners.find_one({"_id": ann["user_id"]})
     assert ann["token"] == "ann" and ann["code"] == "ANN20" and ann["stripe_promotion_code_id"] == "promo_ann" and ann["status"] == "approved"
     assert ann["metadata"] == {"stripe_customer_id": "cus_annself"}
     assert ann_user["email"] == "ann@rw.example" and "password_hash" not in ann_user and "claim_token_hash" not in ann_user
@@ -326,7 +327,7 @@ async def test_backfill_visitors_gives_clicks_a_history(client, db, rewardful):
 async def test_exports(client, db, rewardful):
     h = auth(await signup(client, db, "owner2@rwco.example", "Ray"))
     await client.post("/merchant", json={"name": "Exportco", "website": "https://exportco.example"}, headers=h)
-    aff_h = auth(await signup(client, db, "=cmd@exp.example", "=HYPERLINK(1)"))
+    aff_h = auth(await signup(client, db, "=cmd@exp.example", "=HYPERLINK(1)", partner=True))
     await client.post("/programs/exportco/join", json={}, headers=aff_h)
     r = await client.get("/merchant/export/affiliates.csv", headers=h)
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv") and "attachment" in r.headers["content-disposition"]

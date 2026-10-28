@@ -58,6 +58,16 @@ class Settings(BaseSettings):
     portal_cname_target: str = "portals.kickrail.com"
     # Background delivery of webhooks, emails and PayPal status checks. Off in tests.
     dispatcher: bool = True
+    # Railhq accounts (app/railhq.py, routers/railhq.py): one sign-in for the people who run
+    # programs, the Railhq Pass and the MCP gateway. Any of the three empty: Kickrail keeps
+    # its own operator logins. Affiliates (partners) never use Railhq.
+    railhq_issuer: str = ""
+    railhq_client_id: str = ""
+    railhq_client_secret: str = ""
+
+    @property
+    def railhq_enabled(self) -> bool:
+        return bool(self.railhq_issuer and self.railhq_client_id and self.railhq_client_secret)
 
     @property
     def mail_enabled(self) -> bool:

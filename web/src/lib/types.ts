@@ -31,6 +31,8 @@ export type PlanSummary = {
   id: PlanId;
   name: string;
   status: "active" | "trialing" | "trial_ended" | "past_due" | "comped" | string;
+  /** "pass": the owner's Railhq Pass covers this plan. */
+  source?: string;
   comped: boolean;
   trial_ends_at: string | null;
   interval: "month" | "year" | null;

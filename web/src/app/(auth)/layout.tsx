@@ -1,10 +1,33 @@
+import Link from "next/link";
 import { Logo } from "@/components/Logo";
+import { api, portalSlug } from "@/lib/backend";
 
-export default function AuthLayout({ children }: { children: React.ReactNode }) {
+type Brand = { name: string; branding: { logo_url: string | null } };
+
+/** On a program's portal domain, the sign-in pages carry that program's name and logo. */
+async function portalBrand(): Promise<Brand | null> {
+  const slug = await portalSlug();
+  if (!slug) return null;
+  try {
+    return await api<Brand>(`/programs/${encodeURIComponent(slug)}`, { auth: false });
+  } catch {
+    return null;
+  }
+}
+
+export default async function AuthLayout({ children }: { children: React.ReactNode }) {
+  const brand = await portalBrand();
   return (
     <div className="grid min-h-screen lg:grid-cols-[1fr_1.1fr]">
       <div className="flex flex-col px-4 py-6 sm:px-10">
-        <Logo />
+        {brand ? (
+          <Link href="/" className="flex items-center gap-2 text-[17px] font-semibold tracking-tight">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {brand.branding.logo_url ? <img src={brand.branding.logo_url} alt={brand.name} className="h-8 w-auto object-contain" /> : brand.name}
+          </Link>
+        ) : (
+          <Logo />
+        )}
         <div className="mx-auto my-auto w-full max-w-sm py-12">{children}</div>
       </div>
       <aside className="relative hidden overflow-hidden bg-ink p-12 text-white lg:flex lg:flex-col lg:justify-end">

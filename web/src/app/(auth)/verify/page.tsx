@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { api, ApiError } from "@/lib/backend";
-import { getSession } from "@/lib/session";
+import { getPartnerSession, getSession } from "@/lib/session";
 
 export const metadata = { title: "Email confirmed" };
 
@@ -9,12 +9,16 @@ export default async function Verify({ searchParams }: { searchParams: Promise<{
   const { token = "" } = await searchParams;
   let result: { email: string; next: string | null } | null = null;
   let error = "Open the full link from your email.";
-  if (token) {
+  let partner = false;
+  // The dashboard login's link, else the affiliate login's.
+  for (const side of token ? ["/auth", "/partner/auth"] : []) {
     try {
-      result = await api<{ email: string; next: string | null }>("/auth/verify", { auth: false, body: { token } });
+      result = await api<{ email: string; next: string | null }>(`${side}/verify`, { auth: false, body: { token } });
+      partner = side === "/partner/auth";
+      break;
     } catch (e) {
       if (!(e instanceof ApiError)) throw e;
-      error = e.message;
+      if (side === "/auth" || e.status !== 400) error = e.message;
     }
   }
   if (!result) {
@@ -28,7 +32,7 @@ export default async function Verify({ searchParams }: { searchParams: Promise<{
   }
   const next = result.next ?? "/home";
   // Opened in another browser than the one they signed up in: they still need to sign in there.
-  const signedIn = Boolean(await getSession());
+  const signedIn = Boolean(await (partner ? getPartnerSession() : getSession()));
   return (
     <>
       <h1 className="font-display text-3xl tracking-tight">Email confirmed</h1>

@@ -64,7 +64,7 @@ async def account_email(db: AsyncDatabase, to: str, kind: str, subject: str, hea
 
 
 async def _aff_parts(db: AsyncDatabase, aff: dict) -> tuple[dict, list[dict], list[dict], dict | None]:
-    user = await db.users.find_one({"_id": aff["user_id"]}) or {}
+    user = await db.partners.find_one({"_id": aff["user_id"]}) or {}
     links = await db.affiliate_links.find({"affiliate_id": aff["_id"]}).to_list(None)
     codes = await db.affiliate_codes.find({"affiliate_id": aff["_id"]}).to_list(None)
     campaign = await db.campaigns.find_one({"_id": aff.get("campaign_id")})
@@ -134,7 +134,7 @@ async def self_referral(db: AsyncDatabase, m: dict, r: dict) -> None:
     if r.get("test") or not email_on(m, "self_referral"):
         return
     aff = await db.affiliates.find_one({"_id": r["affiliate_id"]}, {"user_id": 1}) or {}
-    user = await db.users.find_one({"_id": aff.get("user_id")}, {"name": 1, "email": 1}) or {}
+    user = await db.partners.find_one({"_id": aff.get("user_id")}, {"name": 1, "email": 1}) or {}
     who = user.get("name") or user.get("email") or "an affiliate"
     outcome = "It was rejected automatically, as your settings ask, so it earns nothing." if r.get("rejected") else "Its commissions and rewards are held until you approve or reject it."
     reasons = [f["detail"] for f in r.get("flags") or []]
@@ -160,7 +160,7 @@ async def commission_created(db: AsyncDatabase, m: dict, c: dict) -> None:
     if c["amount_cents"] <= 0 or not email_on(m, "commission"):
         return
     aff = await db.affiliates.find_one({"_id": c["affiliate_id"]})
-    user = await db.users.find_one({"_id": aff["user_id"]}) if aff else None
+    user = await db.partners.find_one({"_id": aff["user_id"]}) if aff else None
     if not user:
         return
     what = "a new signup" if c.get("kind") == "lead" else "a payment from someone you referred"
@@ -185,7 +185,7 @@ async def payout_paid(db: AsyncDatabase, m: dict, payout: dict, items: list[dict
     if not email_on(m, "payout"):
         return
     sent = items if items is not None else payout["items"]
-    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": [i["user_id"] for i in sent]}})}
+    users = {u["_id"]: u async for u in db.partners.find({"_id": {"$in": [i["user_id"] for i in sent]}})}
     how = {"stripe": "to your Stripe payout account", "paypal": "to your PayPal account", "manual": "using the payout details you saved"}[payout["method"]]
     for item in sent:
         user = users.get(item["user_id"])

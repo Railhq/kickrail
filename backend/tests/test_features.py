@@ -32,10 +32,11 @@ def api():
     return {"authorization": f"Bearer {S['sk']}"}
 
 
-async def signup(client, email, name):
-    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": name}, headers={"x-forwarded-for": f"10.9.0.{len(S) + 1}"})
+async def signup(client, email, name, partner=False):
+    # Affiliates sign up on the portal: their own login, separate from the dashboard's.
+    r = await client.post("/partner/auth/signup" if partner else "/auth/signup", json={"email": email, "password": "correct-horse", "name": name}, headers={"x-forwarded-for": f"10.9.0.{len(S) + 1}"})
     assert r.status_code == 200, r.text
-    await (await get_db()).users.update_one({"email": email}, {"$set": {"email_verified": True}})  # as if they clicked the link
+    await (await get_db())["partners" if partner else "users"].update_one({"email": email}, {"$set": {"email_verified": True}})  # as if they clicked the link
     return r.json()["token"]
 
 
@@ -134,7 +135,7 @@ async def test_branding_and_email_toggles(client):
 
 
 async def test_join_sends_branded_welcome_and_webhook(client, db):
-    S["aff"] = await signup(client, "jane@creators.example", "Jane")
+    S["aff"] = await signup(client, "jane@creators.example", "Jane", partner=True)
     r = await client.post("/programs/globex/join", json={}, headers=auth(S["aff"]))
     assert r.status_code == 200, r.text
     S["aff_id"], S["token"] = r.json()["id"], r.json()["token"]
@@ -293,13 +294,13 @@ async def test_api_created_affiliate_claims_with_link_only(client, db):
     mail = await db.emails.find_one({"to": "podcaster@shows.example", "kind": "welcome"})
     token = re.search(r"/claim\?token=(\w+)", mail["text"]).group(1)
     # Knowing the email is not enough to take the account.
-    r = await client.post("/auth/signup", json={"email": "podcaster@shows.example", "password": "hijack-attempt", "name": "Mallory"})
+    r = await client.post("/partner/auth/signup", json={"email": "podcaster@shows.example", "password": "hijack-attempt", "name": "Mallory"})
     assert r.status_code == 409 and "invited" in r.json()["detail"]
-    assert (await client.post("/auth/login", json={"email": "podcaster@shows.example", "password": "anything"})).status_code == 401
-    r = await client.post("/auth/claim", json={"token": token, "password": "pat-secret-pw"})
+    assert (await client.post("/partner/auth/login", json={"email": "podcaster@shows.example", "password": "anything"})).status_code == 401
+    r = await client.post("/partner/auth/claim", json={"token": token, "password": "pat-secret-pw"})
     assert r.status_code == 200, r.text
-    assert (await client.post("/auth/claim", json={"token": token, "password": "again-again"})).status_code == 400
-    r = await client.post("/auth/login", json={"email": "podcaster@shows.example", "password": "pat-secret-pw"})
+    assert (await client.post("/partner/auth/claim", json={"token": token, "password": "again-again"})).status_code == 400
+    r = await client.post("/partner/auth/login", json={"email": "podcaster@shows.example", "password": "pat-secret-pw"})
     assert r.status_code == 200
     portal = (await client.get("/portal", headers=auth(r.json()["token"]))).json()
     assert portal["programs"][0]["program"]["name"] == "Globex"
@@ -323,7 +324,7 @@ async def test_tax_form_gates_payouts(client, db):
     r = await client.put("/tax-info", json=form, headers=auth(S["aff"]))
     assert r.status_code == 200, r.text
     assert r.json()["tax_info"]["tin_last4"] == "6789" and "tin" not in r.json()["tax_info"] and "tin_enc" not in r.json()["tax_info"]
-    stored = await db.users.find_one({"email": "jane@creators.example"})
+    stored = await db.partners.find_one({"email": "jane@creators.example"})
     assert "123456789" not in str(stored["tax_info"])
     tax = (await client.get("/merchant/tax", headers=owner())).json()
     assert next(a for a in tax["affiliates"] if a["affiliate_id"] == S["aff_id"])["form"] == "w9"

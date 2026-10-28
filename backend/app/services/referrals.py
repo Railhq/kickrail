@@ -168,7 +168,7 @@ async def _last_touch(db: AsyncDatabase, merchant: dict, existing: dict, inp: At
     # A test click never takes a real referral.
     if click and click.get("test") and not existing.get("test"):
         return {}
-    aff_user = await db.users.find_one({"_id": affiliate["user_id"]})
+    aff_user = await db.partners.find_one({"_id": affiliate["user_id"]})
     who = email or existing.get("email")
     flags = self_referral_flags(aff_user["email"], aff_user.get("ip_hashes", []), who, inp.ip_hash) if aff_user else []
     return {
@@ -238,7 +238,7 @@ async def attach_referral(db: AsyncDatabase, merchant: dict, inp: AttachInput, c
     if email and await _is_team_email(db, merchant, email):
         return None
     click = await db.clicks.find_one({"_id": click_id}, {"test": 1}) if click_id else None
-    aff_user = await db.users.find_one({"_id": affiliate["user_id"]})
+    aff_user = await db.partners.find_one({"_id": affiliate["user_id"]})
     flags = self_referral_flags(aff_user["email"], aff_user.get("ip_hashes", []), email, inp.ip_hash) if aff_user else []
     referral = {
         "_id": new_id("ref"),

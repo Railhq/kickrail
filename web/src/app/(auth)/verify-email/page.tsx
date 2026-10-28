@@ -1,15 +1,19 @@
 import { redirect } from "next/navigation";
 import { logout, resendVerification } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
-import { authed } from "@/lib/backend";
-import type { Me } from "@/lib/me";
+import { maybe, partnerContext } from "@/lib/backend";
+import type { Me, PartnerMe } from "@/lib/me";
 
 export const metadata = { title: "Confirm your email" };
 
 /** Where unverified accounts wait. The link in the email lands on /verify. */
 export default async function VerifyEmail({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const { next = "/home" } = await searchParams;
-  const me = (await authed<Me>("/auth/me", "/verify-email")) as Me;
+  // Whichever login is waiting on its address: the affiliate one on the affiliate side.
+  const partner = await partnerContext(next);
+  const op = partner ? null : await maybe<Me>("/auth/me");
+  const me = op ?? (await maybe<PartnerMe>("/partner/auth/me"));
+  if (!me) redirect(`/login?next=${encodeURIComponent(`/verify-email?next=${next}`)}`);
   if (me.user.email_verified) redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/home");
   return (
     <>
@@ -19,6 +23,7 @@ export default async function VerifyEmail({ searchParams }: { searchParams: Prom
       </p>
       <ActionForm action={resendVerification} className="mt-6">
         <input type="hidden" name="next" value={next} />
+        <input type="hidden" name="side" value={op ? "operator" : "partner"} />
         <Submit variant="secondary" className="w-full">Send the link again</Submit>
       </ActionForm>
       <form action={logout} className="mt-6 text-center text-sm text-muted">

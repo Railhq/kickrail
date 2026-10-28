@@ -9,9 +9,10 @@ def auth(token):
     return {"authorization": f"Bearer {token}"}
 
 
-async def signup(client, db, email, name):
-    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
-    await db.users.update_one({"email": email}, {"$set": {"email_verified": True}})
+async def signup(client, db, email, name, partner=False):
+    # Affiliates sign up on the portal: their own login, separate from the dashboard's.
+    r = await client.post("/partner/auth/signup" if partner else "/auth/signup", json={"email": email, "password": "correct-horse", "name": name})
+    await db["partners" if partner else "users"].update_one({"email": email}, {"$set": {"email_verified": True}})
     return r.json()["token"]
 
 
@@ -19,7 +20,7 @@ async def test_pay_chosen_commissions_early(client, db):
     owner = await signup(client, db, "owner@early.example", "Eve")
     h = auth(owner)
     mid = (await client.post("/merchant", json={"name": "Earlyco", "website": "https://earlyco.example"}, headers=h)).json()["merchant"]["id"]
-    aff = (await client.post("/programs/earlyco/join", json={}, headers=auth(await signup(client, db, "aff@early.example", "Ari")))).json()
+    aff = (await client.post("/programs/earlyco/join", json={}, headers=auth(await signup(client, db, "aff@early.example", "Ari", partner=True)))).json()
     camp = (await db.affiliates.find_one({"_id": aff["id"]}))["campaign_id"]
     await db.affiliates.update_one({"_id": aff["id"]}, {"$set": {"status": "approved"}})
     await db.campaigns.update_one({"_id": camp}, {"$set": {"min_payout_cents": 100_000}})
