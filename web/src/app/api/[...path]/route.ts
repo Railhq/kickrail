@@ -6,7 +6,7 @@
  */
 import { NextRequest } from "next/server";
 import { BACKEND_URL, clientIp, internalToken } from "@/lib/backend";
-import { PROGRAM_COOKIE, SESSION_COOKIE } from "@/lib/session";
+import { isPartnerPath, PARTNER_COOKIE, PROGRAM_COOKIE, SESSION_COOKIE } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,8 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
   headers.set("x-internal-token", internalToken());
   headers.set("x-forwarded-for", clientIp(req.headers));
   // Only same-origin browser requests may act as the signed-in user.
-  const session = req.cookies.get(SESSION_COOKIE)?.value;
+  const partner = isPartnerPath(`/${path.join("/")}`);
+  const session = (partner && req.cookies.get(PARTNER_COOKIE)?.value) || req.cookies.get(SESSION_COOKIE)?.value;
   const site = req.headers.get("sec-fetch-site");
   if (session && !headers.has("authorization") && (site === null || site === "same-origin")) {
     headers.set("authorization", `Bearer ${session}`);

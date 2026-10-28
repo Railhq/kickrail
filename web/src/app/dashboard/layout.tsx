@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { logout } from "@/app/actions";
 import { Logo } from "@/components/Logo";
 import { api } from "@/lib/backend";
-import { getMe } from "@/lib/me";
+import { affiliations, getMe } from "@/lib/me";
 import type { PlanSummary } from "@/lib/types";
 import { Nav } from "./Nav";
 import { ProgramSwitcher } from "./ProgramSwitcher";
@@ -11,7 +11,7 @@ import { ProgramSwitcher } from "./ProgramSwitcher";
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const me = await getMe("/dashboard");
   if (!me.merchant) redirect("/onboarding");
-  const { flagged, plan } = await api<{ flagged: number; plan: PlanSummary }>("/merchant/overview");
+  const [{ flagged, plan }, promoting] = await Promise.all([api<{ flagged: number; plan: PlanSummary }>("/merchant/overview"), affiliations()]);
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="bg-ink p-3 text-white md:sticky md:top-0 md:flex md:h-screen md:w-60 md:shrink-0 md:flex-col md:p-4">
@@ -28,7 +28,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           <Nav flagged={flagged} />
         </div>
         <div className="mt-auto hidden space-y-0.5 border-t border-ink-line pt-3 text-sm text-ink-muted md:block">
-          {me.affiliations > 0 && <Link href="/a" className="block rounded-lg px-3 py-1.5 hover:text-white">Programs I promote</Link>}
+          {promoting > 0 && <Link href="/a" className="block rounded-lg px-3 py-1.5 hover:text-white">Programs I promote</Link>}
           <form action={logout}><button className="w-full rounded-lg px-3 py-1.5 text-left hover:text-white">Sign out</button></form>
         </div>
       </aside>

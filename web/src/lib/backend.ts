@@ -1,7 +1,7 @@
 import "server-only";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { getProgram, getSession } from "./session";
+import { getPartnerSession, getProgram, getSession, isPartnerPath } from "./session";
 
 export const BACKEND_URL = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 
@@ -34,7 +34,10 @@ function detail(body: unknown, status: number): string {
 export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown; auth?: boolean } = {}): Promise<T> {
   const h = await headers();
   const out: Record<string, string> = { "x-internal-token": internalToken(), "x-forwarded-for": clientIp(h) };
-  if (init.auth !== false) {
+  if (init.auth !== false && isPartnerPath(path)) {
+    const token = await getPartnerSession();
+    if (token) out.authorization = `Bearer ${token}`;
+  } else if (init.auth !== false) {
     const token = await getSession();
     if (token) out.authorization = `Bearer ${token}`;
     const program = await getProgram();
@@ -67,6 +70,26 @@ export async function authed<T>(path: string, next: string): Promise<T | null> {
     if (e instanceof ApiError && e.status === 404) return null;
     throw e;
   }
+}
+
+/** Like api(), but null when signed out (401) or not found (404), without redirecting. */
+export async function maybe<T>(path: string): Promise<T | null> {
+  try {
+    return await api<T>(path);
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 401 || e.status === 404)) return null;
+    throw e;
+  }
+}
+
+/** The program whose portal domain this request came in on (set by middleware), if any. */
+export async function portalSlug(): Promise<string | null> {
+  return (await headers()).get("x-kickrail-portal-slug");
+}
+
+/** Pages for affiliates: a program's portal domain, or a next path on the affiliate side. */
+export async function partnerContext(next: string): Promise<boolean> {
+  return /^\/(?:a|join|claim)(?:[/?]|$)/.test(next) || Boolean(await portalSlug());
 }
 
 /** This site's origin, for links shown to users. */

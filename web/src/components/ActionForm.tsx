@@ -24,6 +24,7 @@ export function ActionForm({
       {children}
       {state?.error && <p className="mt-3 text-sm text-red-600">{state.error}</p>}
       {state?.ok && <p className="mt-3 text-sm text-emerald-700">{state.ok}</p>}
+      {state?.ok && state.href && <a className="btn btn-primary mt-3 w-full" href={state.href}>Continue</a>}
       {state?.secret && (
         <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
           <p className="font-medium text-amber-900">{secretLabel}. Copy it now: it won&apos;t be shown again.</p>

@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 const OWN_HOSTS = new Set((process.env.APP_HOSTS ?? "localhost,127.0.0.1").split(",").map((h) => h.trim().toLowerCase()));
 const PROXY_TOKEN = process.env.PORTAL_PROXY_TOKEN ?? "";
-const PROXY_HEADERS = ["x-kickrail-proxy-token", "x-kickrail-portal-host", "x-kickrail-client-ip"];
+const PROXY_HEADERS = ["x-kickrail-proxy-token", "x-kickrail-portal-host", "x-kickrail-client-ip", "x-kickrail-portal-slug"];
 const TTL_MS = 60_000;
 const cache = new Map<string, { slug: string | null; at: number }>();
 
@@ -59,6 +59,8 @@ export async function middleware(req: NextRequest) {
   if (!host || OWN_HOSTS.has(host) || pathname.startsWith("/api/")) return next();
   const slug = await slugFor(host);
   if (!slug) return next();
+  // Pages on a portal domain are the affiliate side, branded as the program.
+  headers.set("x-kickrail-portal-slug", slug);
   // Kickrail's blog is proxied in next.config; it doesn't belong on a merchant's domain.
   if (pathname === "/blog" || pathname.startsWith("/blog/")) return new NextResponse("Not found", { status: 404 });
   // The merchant dashboard stays on Kickrail's own domain.

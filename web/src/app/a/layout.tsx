@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { logout } from "@/app/actions";
 import { Logo } from "@/components/Logo";
-import { getMe } from "@/lib/me";
+import { maybe } from "@/lib/backend";
+import { getPartnerMe, type Me } from "@/lib/me";
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
-  const me = await getMe("/a");
+  const me = await getPartnerMe("/a");
+  // The dashboard is its own login; link to it when this browser is signed in there too.
+  const operator = await maybe<Me>("/auth/me");
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-10 border-b border-line bg-bg/85 backdrop-blur">
@@ -18,7 +21,7 @@ export default async function PortalLayout({ children }: { children: React.React
             <Link href="/a/payouts" className="rounded-lg px-2.5 py-1.5 hover:bg-sunk hover:text-fg">
               Payouts{!me.user.can_be_paid && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />}
             </Link>
-            {me.merchant && <Link href="/dashboard" className="rounded-lg px-2.5 py-1.5 hover:bg-sunk hover:text-fg">My program</Link>}
+            {operator?.merchant && <Link href="/dashboard" className="rounded-lg px-2.5 py-1.5 hover:bg-sunk hover:text-fg">My program</Link>}
             <form action={logout}><button className="rounded-lg px-2.5 py-1.5 hover:bg-sunk hover:text-fg">Sign out</button></form>
           </nav>
         </div>

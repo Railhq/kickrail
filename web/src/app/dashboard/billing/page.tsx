@@ -11,6 +11,7 @@ export const metadata = { title: "Billing" };
 
 function statusLine(p: PlanSummary) {
   if (p.comped) return "Kickrail is free for this program.";
+  if (p.source === "pass") return `Included in your Railhq Pass: ${p.name} at no charge while the owner's Pass is active.`;
   if (p.status === "trialing" && p.trial_ends_at) {
     const days = Math.max(0, Math.ceil((new Date(p.trial_ends_at).getTime() - Date.now()) / 86_400_000));
     return p.subscribed ? `Trial: your card is charged on ${date(p.trial_ends_at)}.` : `Free trial of ${p.name}: ${days} ${days === 1 ? "day" : "days"} left, no card needed. After that the program moves to Free unless you pick a plan.`;

@@ -2,21 +2,23 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { api, ApiError, siteUrl } from "@/lib/backend";
-import { clearSession, setProgram, setSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { api, ApiError, partnerContext, siteUrl } from "@/lib/backend";
+import { clearSession, RAILHQ_FLOW_COOKIE, setPartnerSession, setProgram, setSession } from "@/lib/session";
 
-export type State = { error?: string; ok?: string; secret?: string } | null;
+/** `href`: a link to show with `ok` (where to go next). */
+export type State = { error?: string; ok?: string; secret?: string; href?: string } | null;
 
 const str = (f: FormData, k: string) => (f.get(k) as string | null)?.trim() ?? "";
 const num = (f: FormData, k: string) => (str(f, k) === "" ? undefined : Number(str(f, k)));
 const cents = (f: FormData, k: string) => (str(f, k) === "" ? undefined : Math.round(Number(str(f, k)) * 100));
 
 /** Run a backend call; turn backend errors into form state. Redirects happen after this returns. */
-async function attempt<T>(fn: () => Promise<T>): Promise<{ value?: T; error?: string }> {
+async function attempt<T>(fn: () => Promise<T>): Promise<{ value?: T; error?: string; status?: number }> {
   try {
     return { value: await fn() };
   } catch (e) {
-    if (e instanceof ApiError) return { error: e.message };
+    if (e instanceof ApiError) return { error: e.message, status: e.status };
     throw e;
   }
 }
@@ -26,19 +28,36 @@ function safeNext(next: string, fallback: string) {
 }
 
 // ---------- auth ----------
+// The dashboard (operators) and the affiliate portal (partners) are separate logins. Pages
+// on the affiliate side (a portal domain, or a next path under /a, /join, /claim) use the
+// partner one; elsewhere the operator one is tried first and the affiliate one after.
+
+type Session = { token: string; railhq_handoff?: string; railhq_flow?: string; railhq_note?: string };
+
+/** Railhq's /handoff, after a dashboard sign-in that Railhq checked. */
+async function toRailhq(r: Session) {
+  if (!r.railhq_handoff || !r.railhq_flow) return;
+  (await cookies()).set(RAILHQ_FLOW_COOKIE, r.railhq_flow, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 600 });
+  redirect(r.railhq_handoff);
+}
 
 export async function signup(_: State, f: FormData): Promise<State> {
-  const next = safeNext(str(f, "next"), "/onboarding");
+  const partner = await partnerContext(str(f, "next"));
+  const next = safeNext(str(f, "next"), partner ? "/a" : "/onboarding");
   const site = await siteUrl(); // emailed links open on this host (Kickrail or a portal domain)
-  const r = await attempt(() => api<{ token: string }>("/auth/signup", { auth: false, body: { name: str(f, "name"), email: str(f, "email"), password: str(f, "password"), next, site } }));
+  const body = { name: str(f, "name"), email: str(f, "email"), password: str(f, "password"), next, site };
+  const r = await attempt(() => api<Session>(partner ? "/partner/auth/signup" : "/auth/signup", { auth: false, body }));
   if (r.error) return { error: r.error };
-  await setSession(r.value!.token);
+  if (partner) await setPartnerSession(r.value!.token);
+  else await setSession(r.value!.token);
+  if (!partner) await toRailhq(r.value!);
   redirect(`/verify-email?next=${encodeURIComponent(next)}`);
 }
 
 export async function resendVerification(_: State, f: FormData): Promise<State> {
   const site = await siteUrl();
-  const r = await attempt(() => api<{ already_verified?: boolean }>("/auth/verify/resend", { body: { next: safeNext(str(f, "next"), "/home"), site } }));
+  const path = str(f, "side") === "partner" ? "/partner/auth/verify/resend" : "/auth/verify/resend";
+  const r = await attempt(() => api<{ already_verified?: boolean }>(path, { body: { next: safeNext(str(f, "next"), "/home"), site } }));
   if (r.error) return { error: r.error };
   if (r.value!.already_verified) redirect(safeNext(str(f, "next"), "/home"));
   return { ok: "Sent. Check your inbox." };
@@ -46,27 +65,56 @@ export async function resendVerification(_: State, f: FormData): Promise<State> 
 
 export async function forgotPassword(_: State, f: FormData): Promise<State> {
   const site = await siteUrl();
-  const r = await attempt(() => api("/auth/password/forgot", { auth: false, body: { email: str(f, "email"), site } }));
-  return r.error ? { error: r.error } : { ok: "If there's an account for that address, a reset link is on its way. It works for 1 hour." };
+  const body = { email: str(f, "email"), site };
+  // Either login may have this address; each sends its own link, or nothing.
+  const sides = (await partnerContext(str(f, "next"))) ? ["/partner/auth"] : ["/auth", "/partner/auth"];
+  const r = await Promise.all(sides.map((p) => attempt(() => api(`${p}/password/forgot`, { auth: false, body }))));
+  const error = r.find((x) => x.error)?.error;
+  return error ? { error } : { ok: "If there's an account for that address, a reset link is on its way. It works for 1 hour." };
 }
 
 export async function resetPassword(_: State, f: FormData): Promise<State> {
-  const r = await attempt(() => api<{ token: string }>("/auth/password/reset", { auth: false, body: { token: str(f, "token"), password: str(f, "password") } }));
-  if (r.error) return { error: r.error };
-  await setSession(r.value!.token);
+  const body = { token: str(f, "token"), password: str(f, "password") };
+  const op = await attempt(() => api<Session>("/auth/password/reset", { auth: false, body }));
+  if (op.value) {
+    await setSession(op.value.token);
+    redirect("/home");
+  }
+  const pt = await attempt(() => api<Session>("/partner/auth/password/reset", { auth: false, body }));
+  if (pt.error) return { error: op.status === 400 ? pt.error : op.error };
+  await setPartnerSession(pt.value!.token);
   redirect("/home");
 }
 
 export async function login(_: State, f: FormData): Promise<State> {
-  const r = await attempt(() => api<{ token: string }>("/auth/login", { auth: false, body: { email: str(f, "email"), password: str(f, "password") } }));
-  if (r.error) return { error: r.error };
-  await setSession(r.value!.token);
-  redirect(safeNext(str(f, "next"), "/home"));
+  const body = { email: str(f, "email"), password: str(f, "password"), next: str(f, "next") };
+  const next = safeNext(body.next, "/home");
+  let opError: string | undefined;
+  if (!(await partnerContext(body.next))) {
+    const op = await attempt(() => api<Session>("/auth/login", { auth: false, body }));
+    if (op.value) {
+      await setSession(op.value.token);
+      // Someone who also promotes programs with the same password (one login before the split).
+      const pt = await attempt(() => api<Session>("/partner/auth/login", { auth: false, body }));
+      if (pt.value) await setPartnerSession(pt.value.token);
+      if (op.value.railhq_note) return { ok: op.value.railhq_note, href: next };
+      await toRailhq(op.value);
+      redirect(next);
+    }
+    if (op.status !== 401) return { error: op.error };
+    opError = op.error;
+  }
+  const pt = await attempt(() => api<Session>("/partner/auth/login", { auth: false, body }));
+  if (pt.error) return { error: opError ?? pt.error };
+  await setPartnerSession(pt.value!.token);
+  redirect(next);
 }
 
 export async function logout() {
+  // A dashboard session from a Railhq sign-in ends at Railhq too.
+  const r = await attempt(() => api<{ redirect: string | null }>("/auth/logout", { method: "POST" }));
   await clearSession();
-  redirect("/");
+  redirect(r.value?.redirect ?? "/");
 }
 
 // ---------- merchant workspace ----------
@@ -557,9 +605,9 @@ export async function saveTaxInfo(_: State, f: FormData): Promise<State> {
 }
 
 export async function claimAccount(_: State, f: FormData): Promise<State> {
-  const r = await attempt(() => api<{ token: string }>("/auth/claim", { auth: false, body: { token: str(f, "token"), password: str(f, "password"), name: str(f, "name") || null } }));
+  const r = await attempt(() => api<{ token: string }>("/partner/auth/claim", { auth: false, body: { token: str(f, "token"), password: str(f, "password"), name: str(f, "name") || null } }));
   if (r.error) return { error: r.error };
-  await setSession(r.value!.token);
+  await setPartnerSession(r.value!.token);
   redirect("/a");
 }
 
