@@ -603,6 +603,33 @@ async def backfill_links(db: AsyncDatabase, merchant_id: str, api: "Rewardful") 
     return counts
 
 
+async def backfill_visitors(db: AsyncDatabase, merchant_id: str, api: "Rewardful", force: bool = False) -> dict:
+    """Keeps each imported affiliate's Rewardful visitor total as a starting click count.
+
+    Rewardful exports no click history, only a running total, so without this an imported
+    affiliate's clicks start at zero while their signups and customers go back years.
+    Kickrail's own clicks then count only from `imported_clicks_at`, since Rewardful's total
+    already covers everything before it. Only affiliates fields are written; safe while
+    Stripe is connected. Affiliates that already have a count are skipped unless forced."""
+    counts = {"seen": 0, "updated": 0, "no_visitors": 0, "not_in_kickrail": 0}
+    at = datetime.now(UTC)
+    async with api:
+        async for rows, _ in api.pages("/affiliates"):
+            for a in rows:
+                counts["seen"] += 1
+                visitors = int(a.get("visitors") or 0)
+                if visitors <= 0:
+                    counts["no_visitors"] += 1
+                    continue
+                q = {"merchant_id": merchant_id, "rewardful_id": a["id"], **({} if force else {"imported_clicks": {"$exists": False}})}
+                res = await db.affiliates.update_one(q, {"$set": {"imported_clicks": visitors, "imported_clicks_at": at}})
+                if res.matched_count:
+                    counts["updated"] += res.modified_count
+                elif not await db.affiliates.find_one({"merchant_id": merchant_id, "rewardful_id": a["id"]}, {"_id": 1}):
+                    counts["not_in_kickrail"] += 1
+    return counts
+
+
 async def running_import(db: AsyncDatabase, merchant_id: str) -> dict | None:
     doc = await db.imports.find_one({"merchant_id": merchant_id, "status": "running"}, sort=[("started_at", -1)])
     return doc if doc and (import_out(doc) or {}).get("status") == "running" else None

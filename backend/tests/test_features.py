@@ -216,6 +216,12 @@ async def test_view_as_matches_portal(client):
     seen = (await client.get(f"/merchant/affiliates/{S['aff_id']}/view", headers=owner())).json()
     assert seen["affiliate"] == {"name": "Jane", "email": "jane@creators.example"}
     seen.pop("affiliate")
+    # Except whom each commission was for: the merchant gets the referral, the affiliate a masked email.
+    for a, b in zip(seen["commissions"], mine["commissions"]):
+        if a["customer"]:
+            assert a["customer"]["referral_id"] and "referral_id" not in b["customer"]
+            assert b["customer"]["email"] in (None, a["customer"]["email"][:2] + "***@" + a["customer"]["email"].split("@")[1])
+        a.pop("customer"), b.pop("customer")
     assert seen == mine
     other = await signup(client, "nosy@else.example", "Nosy")
     assert (await client.get(f"/merchant/affiliates/{S['aff_id']}/view", headers=auth(other))).status_code in (403, 404)

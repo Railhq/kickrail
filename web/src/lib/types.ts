@@ -270,8 +270,9 @@ export type PortalView = {
   clicks_30d: number;
   leads: number;
   customers: number;
+  customers_from_clicks: number;
   totals: Record<string, { in_hold: number; payable: number; paid: number }>;
-  commissions: { id: string; kind: "lead" | "sale"; amount_cents: number; currency: string; status: string; held_for_review: boolean; clawback: boolean; due_at: string; paid_at?: string; created_at: string; void_reason?: string }[];
+  commissions: { id: string; kind: "lead" | "sale"; amount_cents: number; currency: string; status: string; held_for_review: boolean; clawback: boolean; due_at: string; paid_at?: string; created_at: string; void_reason?: string; customer: { email: string | null; referral_id?: string } | null }[];
   reward_mode: "cash" | "custom";
   rewards: { id: string; description: string; status: "earned" | "fulfilled"; held_for_review: boolean; created_at: string; fulfilled_at?: string | null }[];
 };

@@ -105,7 +105,7 @@ export default async function OverviewPage() {
         {o.leads > o.leads_from_clicks && (
           <p className="mt-2 text-xs text-muted">
             The click rate counts only the {o.leads_from_clicks.toLocaleString()} signup{o.leads_from_clicks === 1 ? "" : "s"} that came from a tracked click.
-            {o.imported_leads > 0 && <> {o.imported_leads.toLocaleString()} were imported from Rewardful, which doesn&apos;t export clicks.</>}
+            {o.imported_leads > 0 && <> {o.imported_leads.toLocaleString()} were imported from Rewardful for affiliates with no Rewardful visitor count.</>}
           </p>
         )}
       </section>

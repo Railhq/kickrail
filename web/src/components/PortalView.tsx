@@ -173,7 +173,7 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
         <Stat label="Clicks" value={d.clicks} hint={`${d.clicks_30d} in the last 30 days`} />
         <Stat label="Signups" value={d.leads} />
         <Stat label="Customers" value={d.customers} />
-        <Stat label="Conversion" value={d.clicks ? `${((d.customers / d.clicks) * 100).toFixed(1)}%` : "–"} hint="customers per click" />
+        <Stat label="Conversion" value={d.clicks ? `${((d.customers_from_clicks / d.clicks) * 100).toFixed(1)}%` : "–"} hint="customers per click" />
       </StatGroup>
 
       {custom && (
@@ -207,10 +207,17 @@ export function PortalView({ d, preview = false, back }: { d: View; preview?: bo
         {d.commissions.length === 0 ? (
           <Empty>No commissions yet. You earn when someone you referred pays.</Empty>
         ) : (
-          <Table head={["Earned", "For", "Amount", "Status", "When payable"]}>
+          <Table head={["Earned", "Customer", "For", "Amount", "Status", "When payable"]}>
             {d.commissions.map((c) => (
               <tr key={c.id}>
                 <td className="px-5 py-3 text-muted">{date(c.created_at)}</td>
+                <td className="max-w-[16rem] break-all px-5 py-3">
+                  {c.customer?.referral_id ? (
+                    <Link className="link" href={`/dashboard/referrals/${c.customer.referral_id}`}>{c.customer.email || "customer"}</Link>
+                  ) : (
+                    <span className="text-muted">{c.customer?.email || "–"}</span>
+                  )}
+                </td>
                 <td className="px-5 py-3 text-muted">{c.kind === "lead" ? "signup" : c.clawback ? "refund" : "payment"}</td>
                 <td className={`num px-5 py-3 ${c.amount_cents < 0 ? "text-red-700" : ""}`}>{money(c.amount_cents, c.currency)}</td>
                 <td className="px-5 py-3">

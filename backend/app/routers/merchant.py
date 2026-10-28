@@ -26,7 +26,7 @@ from ..services import audit, fx, notify
 from ..services import payouts as payout_svc
 from ..services import deletion, rewardful_import, rewards, stripe_sync, terms
 from ..services.exports import EXPORTS
-from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, sync_campaign_codes, sync_promotion_code
+from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, click_count, sync_campaign_codes, sync_promotion_code
 from ..services.notify import EMAIL_KINDS
 
 log = logging.getLogger(__name__)
@@ -762,6 +762,9 @@ async def _affiliate_stats(db, merchant_id: str, affiliate_ids: list[str]) -> di
     async for row in await db.clicks.aggregate([{"$match": {"merchant_id": merchant_id, "affiliate_id": {"$in": affiliate_ids}, "test": False}}, {"$group": {"_id": "$affiliate_id", "n": {"$sum": 1}}}]):
         if row["_id"] in stats:
             stats[row["_id"]]["clicks"] = row["n"]
+    # Affiliates with a click total imported from Rewardful count tracked clicks only after it.
+    async for a in db.affiliates.find({"_id": {"$in": affiliate_ids}, "imported_clicks": {"$exists": True}}, {"imported_clicks": 1, "imported_clicks_at": 1}):
+        stats[a["_id"]]["clicks"] = await click_count(db, a)
     async for row in await db.referrals.aggregate([{"$match": {"merchant_id": merchant_id, "affiliate_id": {"$in": affiliate_ids}, "test": {"$ne": True}}}, {"$group": {"_id": {"a": "$affiliate_id", "s": "$status"}, "n": {"$sum": 1}}}]):
         a = row["_id"]["a"]
         if a in stats:
@@ -932,7 +935,7 @@ async def view_as_affiliate(affiliate_id: str, m=Depends(current_merchant), db=D
     """Exactly what this affiliate sees in their portal, for support and checking setup."""
     aff = await _aff(db, m, affiliate_id)
     user = await db.users.find_one({"_id": aff["user_id"]}) or {}
-    return {**await affiliate_view(db, m, aff, user), "affiliate": {"name": user.get("name", ""), "email": user.get("email", "")}}
+    return {**await affiliate_view(db, m, aff, user, for_merchant=True), "affiliate": {"name": user.get("name", ""), "email": user.get("email", "")}}
 
 
 class MerchantLinkIn(BaseModel):
@@ -1217,17 +1220,24 @@ async def overview(m=Depends(current_merchant), db=Depends(db_dep)):
     async for row in await db.commissions.aggregate([{"$match": {"merchant_id": mid, "status": {"$ne": "void"}}}, {"$group": {"_id": {"s": "$status", "c": "$currency"}, "t": {"$sum": "$amount_cents"}}}]):
         by_status.setdefault(row["_id"]["s"], {})[row["_id"]["c"]] = row["t"]
     revenue: dict[str, int] = {}
+    # Rewardful click totals stand in for the clicks before their import.
+    clicks = await db.clicks.count_documents({"merchant_id": mid, "test": False})
+    with_history = []
+    async for a in db.affiliates.find({"merchant_id": mid, "imported_clicks": {"$exists": True}}, {"imported_clicks": 1, "imported_clicks_at": 1}):
+        with_history.append(a["_id"])
+        clicks += a["imported_clicks"] - await db.clicks.count_documents({"affiliate_id": a["_id"], "test": False, "created_at": {"$lt": a["imported_clicks_at"]}})
     async for row in await db.commissions.aggregate([{"$match": {"merchant_id": mid, "status": {"$ne": "void"}, "base_cents": {"$gt": 0}}}, {"$group": {"_id": "$currency", "t": {"$sum": "$base_cents"}}}]):
         revenue[row["_id"]] = row["t"]
     return {
         "affiliates": await db.affiliates.count_documents({"merchant_id": mid, "status": "approved"}),
         "pending_affiliates": await db.affiliates.count_documents({"merchant_id": mid, "status": "pending"}),
-        "clicks": await db.clicks.count_documents({"merchant_id": mid, "test": False}),
+        "clicks": clicks,
         "leads": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}}),
-        # Signups that came from a tracked click: the only ones a click-to-signup rate can compare.
-        # Imported referrals, codes and server-side signups have no click.
-        "leads_from_clicks": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "click_id": {"$type": "string"}}),
-        "imported_leads": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "source": "rewardful"}),
+        # Signups a click-to-signup rate can compare: those from a tracked click, and those
+        # imported for an affiliate whose Rewardful click total was imported too.
+        # Other imported referrals, codes and server-side signups have no click.
+        "leads_from_clicks": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "$or": [{"click_id": {"$type": "string"}}, {"source": "rewardful", "affiliate_id": {"$in": with_history}}]}),
+        "imported_leads": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "source": "rewardful", "affiliate_id": {"$nin": with_history}}),
         "customers": await db.referrals.count_documents({"merchant_id": mid, "status": "customer", "test": {"$ne": True}}),
         "flagged": await db.referrals.count_documents({"merchant_id": mid, "test": {"$ne": True}, "flags.0": {"$exists": True}, "flags_cleared": {"$ne": True}}),
         "referred_revenue": revenue,
