@@ -15,9 +15,10 @@ export function Card({ title, children, actions, className = "", id }: { title?:
 /** A single stat, laid out to sit inside a StatGroup. */
 export function Stat({ label, value, sub, hint, big }: { label: string; value: React.ReactNode; sub?: React.ReactNode; hint?: React.ReactNode; big?: boolean }) {
   return (
-    <div className="min-w-0 px-5 py-4">
+    <div className="min-w-0 px-5 py-4 [container-type:inline-size]">
       <p className="eyebrow">{label}</p>
-      <p className={`mt-2 truncate leading-none ${big ? "font-display text-[2.6rem]" : "num text-2xl font-medium"}`}>{value}</p>
+      {/* Shrinks with the column so a long total fits; truncate is only the last resort. */}
+      <p title={typeof value === "string" ? value : undefined} className={`mt-2 truncate leading-none ${big ? "font-display text-[min(2.6rem,12cqi)]" : "num text-[min(1.5rem,9cqi)] font-medium"}`}>{value}</p>
       {sub && <p className="mt-2 text-sm tabular-nums text-muted">{sub}</p>}
       {hint && <p className="mt-2 text-xs text-muted">{hint}</p>}
     </div>

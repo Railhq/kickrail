@@ -44,14 +44,16 @@ export function displayMoney(m: Record<string, number> | undefined, fx: Fx) {
   const to = fx?.currency ?? "usd";
   if (entries.length === 0) return { main: money(0, to), rest: null };
   const convertible = fx && entries.every(([c]) => fx.per_unit[c]);
-  const approx = () => `≈ ${money(Math.round(entries.reduce((t, [c, v]) => t + (v / unit(c)) * fx!.per_unit[c], 0) * unit(to)), to)}`;
+  const approx = () => `≈\u00a0${money(Math.round(entries.reduce((t, [c, v]) => t + (v / unit(c)) * fx!.per_unit[c], 0) * unit(to)), to)}`;
   if (entries.length === 1) {
     const [c, v] = entries[0];
     return { main: money(v, c), rest: convertible && c !== to ? approx() : null };
   }
   if (!convertible) return splitMoney(m, mainCurrency(m));
   const exact = entries.sort(([a, x], [b, y]) => (a === to ? -1 : b === to ? 1 : y - x)).map(([c, v]) => money(v, c));
-  return { main: approx(), rest: exact.join(" + ") };
+  // A non-breaking space before each "+", so a long list wraps between whole amounts
+  // and no line starts with a "+".
+  return { main: approx(), rest: exact.join("\u00a0+ ") };
 }
 
 /** Footnote for a page that shows converted totals. */
