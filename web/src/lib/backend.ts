@@ -34,12 +34,14 @@ function detail(body: unknown, status: number): string {
 export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown; auth?: boolean } = {}): Promise<T> {
   const h = await headers();
   const out: Record<string, string> = { "x-internal-token": internalToken(), "x-forwarded-for": clientIp(h) };
+  let operator = false;
   if (init.auth !== false && isPartnerPath(path)) {
     const token = await getPartnerSession();
     if (token) out.authorization = `Bearer ${token}`;
   } else if (init.auth !== false) {
     const token = await getSession();
     if (token) out.authorization = `Bearer ${token}`;
+    operator = !!token;
     const program = await getProgram();
     if (program) out["x-kickrail-program"] = program;
   }
@@ -57,6 +59,10 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     const from = h.get("referer") ? new URL(h.get("referer")!).pathname : "";
     redirect(`/verify-email${from ? `?next=${encodeURIComponent(from)}` : ""}`);
   }
+  // A session that ended (signed out of Railhq elsewhere, password reset) goes to sign-in
+  // instead of erroring the page. Only on dashboard pages: elsewhere a 401 means "show the signed-out view".
+  const page = h.get("x-kickrail-path") ?? "";
+  if (res.status === 401 && operator && /^\/(dashboard|onboarding)(\/|\?|$)/.test(page)) redirect(`/login?next=${encodeURIComponent(page)}`);
   if (!res.ok) throw new ApiError(res.status, detail(body, res.status));
   return body as T;
 }
