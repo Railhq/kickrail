@@ -41,6 +41,8 @@ export async function middleware(req: NextRequest) {
   const fromProxy = PROXY_TOKEN !== "" && sameSecret(req.headers.get("x-kickrail-proxy-token") ?? "", PROXY_TOKEN);
   const headers = new Headers(req.headers);
   PROXY_HEADERS.forEach((h) => headers.delete(h));
+  // So api() knows which page to come back to after a sign-in.
+  headers.set("x-kickrail-path", req.nextUrl.pathname + req.nextUrl.search);
   let host = (req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "").split(":")[0].toLowerCase();
   if (fromProxy) {
     // Pages, server actions (which check Origin against this) and siteUrl() see the real hostname.
