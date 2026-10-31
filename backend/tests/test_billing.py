@@ -46,10 +46,11 @@ def sub_obj(mid, plan, interval="month", status="active", sub_id="sub_1", **extr
     } | extra
 
 
-async def platform_event(client, type_, obj, created=None):
+async def platform_event(client, type_, obj, created=None, path="/webhooks/billing", secret="whsec_billing"):
+    """Billing events, by default as the billing account sends them."""
     event = {"id": f"evt_{secrets.token_hex(6)}", "type": type_, "created": created or int(datetime.now(UTC).timestamp()), "data": {"object": obj}}
     payload = json.dumps(event)
-    return await client.post("/webhooks/platform", content=payload, headers={"stripe-signature": sign(payload, "whsec_platform"), "content-type": "application/json"})
+    return await client.post(path, content=payload, headers={"stripe-signature": sign(payload, secret), "content-type": "application/json"})
 
 
 @pytest.fixture(scope="module")
@@ -187,3 +188,239 @@ async def test_comped_programs_get_scale_free(client, db, prog):
     assert m["plan"]["id"] == "scale" and m["plan"]["comped"] and not m["plan"]["over_limit"] and m["domain_limit"] == 10
     assert plans.current(await db.merchants.find_one({"_id": prog["id"]}))["revenue_cap"] is None
     assert (await client.get("/v1/affiliates", headers=auth(prog["sk"]))).status_code == 200
+
+
+# ---------- a billing account shared with other products ----------
+
+
+async def new_program(client, db, email, name):
+    r = await client.post("/auth/signup", json={"email": email, "password": "correct-horse", "name": "Sam"})
+    token = r.json()["token"]
+    await db.users.update_one({"email": email}, {"$set": {"email_verified": True}})
+    r = await client.post("/merchant", json={"name": name, "website": f"https://{name.lower()}.example"}, headers=auth(token))
+    return {"token": token, "id": r.json()["merchant"]["id"]}
+
+
+def foreign_sub(sub_id="sub_pass1", **meta):
+    return {
+        "id": sub_id, "object": "subscription", "customer": "cus_other", "status": "active", "metadata": meta, "cancel_at_period_end": False,
+        "items": {"data": [{"id": "si_x", "price": {"id": "price_pass", "lookup_key": "railhq_pass_month", "recurring": {"interval": "month"}}}]},
+    }
+
+
+async def test_foreign_subscription_events_are_ignored(client, db):
+    p = await new_program(client, db, "own@shared.example", "Sharedco")
+    before = await db.merchants.find_one({"_id": p["id"]})
+    events = await db.stripe_events.count_documents({})
+    for kind in ("customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"):
+        # Another product's subscription, untagged or tagged for itself; even one that names a program.
+        for obj in (foreign_sub(), foreign_sub(product="railhq_pass", railhq_user="usr_1"), foreign_sub(product="pathrail", kr_merchant=p["id"])):
+            r = await platform_event(client, kind, obj)
+            assert r.status_code == 200 and r.json() == {"outcome": "ignored"}
+    # Odd payloads are still a 200.
+    for obj in ({}, {"metadata": None}, {"id": 5, "metadata": {"kr_merchant": 7}}):
+        assert (await platform_event(client, "customer.subscription.updated", obj)).status_code == 200
+    assert (await platform_event(client, "invoice.paid", {"id": "in_x", "customer": "cus_other"})).json() == {"outcome": "ignored"}
+    after = await db.merchants.find_one({"_id": p["id"]})
+    assert after["plan"] == before["plan"]
+    assert await db.stripe_events.count_documents({}) == events
+
+
+async def test_foreign_checkout_is_ignored_and_ours_is_processed(client, db):
+    p = await new_program(client, db, "own2@shared.example", "Sharedtwo")
+    for obj in (
+        {"id": "cs_pass", "mode": "subscription", "customer": "cus_other", "metadata": {"product": "railhq_pass", "railhq_user": "usr_1"}},
+        {"id": "cs_nometa", "mode": "subscription", "customer": "cus_other"},
+        {"id": "cs_other", "mode": "subscription", "customer": "cus_other", "metadata": {"product": "demorail", "kr_merchant": p["id"]}},
+        {"id": "cs_gone", "mode": "subscription", "customer": "cus_other", "metadata": {"product": "kickrail", "kr_merchant": "mer_nope"}},
+        {"id": "cs_pay", "mode": "payment", "customer": "cus_other", "metadata": {"kr_merchant": p["id"]}},
+    ):
+        r = await platform_event(client, "checkout.session.completed", obj)
+        assert r.status_code == 200 and r.json() == {"outcome": "ignored"}
+    assert not (await db.merchants.find_one({"_id": p["id"]}))["plan"].get("stripe_customer")
+    assert not await db.merchants.find_one({"_id": "mer_nope"})
+
+    meta = {"kr_merchant": p["id"], "product": "kickrail"}
+    r = await platform_event(client, "checkout.session.completed", {"id": "cs_ours", "mode": "subscription", "customer": "cus_ours", "metadata": meta})
+    assert r.json()["outcome"] == "checkout recorded"
+    r = await platform_event(client, "customer.subscription.created", sub_obj(p["id"], "growth", sub_id="sub_ours", customer="cus_ours", metadata=meta))
+    assert r.json()["outcome"] == "growth active"
+    # Later events found by the subscription id alone are ours too.
+    r = await platform_event(client, "customer.subscription.updated", sub_obj(p["id"], "growth", status="past_due", sub_id="sub_ours", customer="cus_ours", metadata={}))
+    assert r.json()["outcome"] == "growth past_due"
+    plan = (await db.merchants.find_one({"_id": p["id"]}))["plan"]
+    assert plan["stripe_customer"] == "cus_ours" and plan["stripe_subscription"] == "sub_ours" and plan["status"] == "past_due"
+    ev = await db.stripe_events.find_one({"type": "customer.subscription.created", "merchant_id": p["id"]})
+    assert ev["endpoint"] == "billing" and ev["status"] == "done"
+
+
+async def test_billing_and_connect_events_never_cross(client, db):
+    await db.partners.insert_one({"_id": "prt_cross", "connect_account_id": "acct_cross", "payouts_enabled": False})
+    connect_obj = {"id": "acct_cross", "payouts_enabled": True, "capabilities": {"transfers": "active"}}
+    payout_obj = {"id": "cs_payout", "mode": "payment", "metadata": {"kr_payout": "pay_cross"}}
+    # Signed by the billing account: Connect and payout handling never see it, on either endpoint.
+    for path in ("/webhooks/billing", "/webhooks/platform"):
+        assert (await platform_event(client, "account.updated", connect_obj, path=path)).json() == {"outcome": "ignored"}
+        assert (await platform_event(client, "checkout.session.completed", payout_obj, path=path)).json() == {"outcome": "ignored"}
+    assert (await db.partners.find_one({"_id": "prt_cross"}))["payouts_enabled"] is False
+    # The billing endpoint refuses the platform's signature.
+    assert (await platform_event(client, "account.updated", connect_obj, secret="whsec_platform")).status_code == 400
+    # The platform's own events still reach Connect handling.
+    r = await platform_event(client, "account.updated", connect_obj, path="/webhooks/platform", secret="whsec_platform")
+    assert r.json()["outcome"] == "payouts_enabled=True"
+    assert (await db.partners.find_one({"_id": "prt_cross"}))["payouts_enabled"] is True
+
+
+async def test_billing_events_sent_to_the_old_endpoint_still_bill(client, db):
+    p = await new_program(client, db, "own3@shared.example", "Sharedthree")
+    r = await platform_event(client, "customer.subscription.created", sub_obj(p["id"], "scale", sub_id="sub_old_ep"), path="/webhooks/platform")
+    assert r.json()["outcome"] == "scale active"
+    assert (await db.stripe_events.find_one({"type": "customer.subscription.created", "merchant_id": p["id"]}))["endpoint"] == "billing"
+    assert (await platform_event(client, "customer.subscription.updated", foreign_sub(), path="/webhooks/platform")).json() == {"outcome": "ignored"}
+
+
+# ---------- the Stripe calls themselves ----------
+
+
+class _Obj(dict):
+    __getattr__ = dict.get
+
+
+class FakeStripeClient:
+    def __init__(self, prices=None, missing_customers=()):
+        self.prices = prices or {}
+        self.missing_customers = set(missing_customers)
+        self.sessions: list[dict] = []
+        self.portal_sessions: list[dict] = []
+        self.created: list[str] = []
+        c = self
+
+        class Prices:
+            async def list_async(self, params):
+                p = c.prices.get(params["lookup_keys"][0])
+                return _Obj(data=[p] if p else [])
+
+            async def create_async(self, params):
+                c.created.append("price")
+
+        class Products:
+            async def create_async(self, params):
+                c.created.append("product")
+
+        class Sessions:
+            async def create_async(self, params):
+                import stripe
+
+                if params.get("customer") in c.missing_customers:
+                    raise stripe.InvalidRequestError("No such customer", "customer", code="resource_missing")
+                c.sessions.append(params)
+                return _Obj(url="https://checkout.stripe.test/cs")
+
+        class PortalSessions:
+            async def create_async(self, params):
+                c.portal_sessions.append(params)
+                return _Obj(url="https://billing.stripe.test/p")
+
+        class PortalConfigs:
+            async def list_async(self, params):
+                return _Obj(data=[_Obj(id="bpc_tagged", metadata={"kr": "billing"})])
+
+        self.v1 = _Obj(prices=Prices(), products=Products(), checkout=_Obj(sessions=Sessions()),
+                       billing_portal=_Obj(sessions=PortalSessions(), configurations=PortalConfigs()))
+
+
+def stripe_billing(fake):
+    b = billing.Billing.__new__(billing.Billing)
+    b.c = fake
+    b._prices = {}
+    return b
+
+
+def price(pid, interval, amount, currency="usd"):
+    return _Obj(id=pid, recurring={"interval": interval}, unit_amount=amount, currency=currency)
+
+
+async def test_prices_are_looked_up_never_created():
+    fake = FakeStripeClient({"kickrail_growth_year": price("price_gy", "year", 79_000)})
+    b = stripe_billing(fake)
+    assert await b.price_id("growth", "year") == "price_gy"
+    with pytest.raises(billing.BillingSetupError, match="kickrail_scale_month"):
+        await b.price_id("scale", "month")
+    fake.prices["kickrail_starter_month"] = price("price_sy", "year", 29_000)
+    with pytest.raises(billing.BillingSetupError, match="per month"):
+        await b.price_id("starter", "month")
+    assert fake.created == []
+
+
+async def test_missing_price_is_a_clear_503(client, db):
+    p = await new_program(client, db, "own4@shared.example", "Sharedfour")
+    app.dependency_overrides[deps.billing_api] = lambda: stripe_billing(FakeStripeClient())
+    try:
+        r = await client.post("/merchant/billing/checkout", json={"plan": "starter", "interval": "month"}, headers=auth(p["token"]))
+    finally:
+        app.dependency_overrides.pop(deps.billing_api, None)
+    assert r.status_code == 503 and "kickrail_starter_month" in r.json()["detail"]
+
+
+async def checkout_params(monkeypatch, managed: bool, customer=None, missing=()):
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "stripe_managed_payments", managed)
+    fake = FakeStripeClient(missing_customers=missing)
+    url = await stripe_billing(fake).checkout(merchant_id="mer_1", customer=customer, email="o@x.example", price="price_1", trial_end=1_900_000_000,
+                                              success_url="https://kickrail.test/ok", cancel_url="https://kickrail.test/no")
+    assert url == "https://checkout.stripe.test/cs"
+    return fake.sessions
+
+
+async def test_checkout_session_params(monkeypatch):
+    (s,) = await checkout_params(monkeypatch, managed=False)
+    assert "managed_payments" not in s
+    assert s["metadata"] == {"kr_merchant": "mer_1", "product": "kickrail"}
+    assert s["subscription_data"] == {"metadata": {"kr_merchant": "mer_1", "product": "kickrail"}, "trial_end": 1_900_000_000}
+    assert s["branding_settings"] == {"display_name": "Kickrail", "logo": {"type": "url", "url": "https://kickrail.test/icon-512.png"}}
+    assert s["customer_email"] == "o@x.example" and "customer" not in s
+
+    (s,) = await checkout_params(monkeypatch, managed=True, customer="cus_1")
+    assert s["managed_payments"] == {"enabled": True}
+    assert s["customer"] == "cus_1" and "customer_email" not in s
+    assert s["subscription_data"]["metadata"]["product"] == "kickrail" and s["branding_settings"]["display_name"] == "Kickrail"
+    assert not set(s) & set(billing.MP_UNSUPPORTED)
+
+
+async def test_checkout_with_a_customer_from_the_old_account_starts_fresh(monkeypatch):
+    (s,) = await checkout_params(monkeypatch, managed=True, customer="cus_old", missing={"cus_old"})
+    assert "customer" not in s and s["customer_email"] == "o@x.example"
+
+
+def test_managed_payments_strips_what_it_does_not_allow():
+    out = billing.managed_payments_params({
+        "mode": "subscription", "automatic_tax": {"enabled": True}, "tax_id_collection": {"enabled": True}, "payment_method_types": ["card"],
+        "customer_update": {"name": "auto", "address": "auto"}, "allow_promotion_codes": True,
+        "subscription_data": {"metadata": {"product": "kickrail"}, "default_tax_rates": ["txr_1"], "invoice_settings": {}, "trial_end": 5},
+    })
+    assert out == {"mode": "subscription", "allow_promotion_codes": True, "managed_payments": {"enabled": True},
+                   "subscription_data": {"metadata": {"product": "kickrail"}, "trial_end": 5}}
+
+
+async def test_portal_uses_the_configured_configuration(monkeypatch):
+    from app.config import get_settings
+
+    fake = FakeStripeClient()
+    b = stripe_billing(fake)
+    assert await b.portal("cus_1", "https://kickrail.test/back") == "https://billing.stripe.test/p"
+    assert fake.portal_sessions[-1]["configuration"] == "bpc_tagged"
+    monkeypatch.setattr(get_settings(), "stripe_portal_configuration", "bpc_railhq_kickrail")
+    await b.portal("cus_1", "https://kickrail.test/back")
+    assert fake.portal_sessions[-1] == {"customer": "cus_1", "return_url": "https://kickrail.test/back", "configuration": "bpc_railhq_kickrail"}
+
+
+def test_managed_payments_needs_its_own_billing_key(monkeypatch):
+    from app.config import Settings
+
+    s = Settings(platform_stripe_secret_key="sk_platform", billing_stripe_secret_key="")
+    assert s.billing_key == "sk_platform"
+    s = Settings(platform_stripe_secret_key="sk_platform", billing_stripe_secret_key="", stripe_managed_payments=True)
+    assert s.billing_key == ""
+    s = Settings(platform_stripe_secret_key="sk_platform", billing_stripe_secret_key="rk_billing", stripe_managed_payments=True)
+    assert s.billing_key == "rk_billing" and s.oauth_key == "sk_platform"

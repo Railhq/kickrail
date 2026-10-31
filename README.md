@@ -31,6 +31,8 @@ Backend settings use the `KR_` prefix (`KR_MONGODB_URI`, `KR_PUBLIC_URL`, …). 
 
 Stripe payouts need a Kickrail platform account with Connect enabled: `KR_PLATFORM_STRIPE_SECRET_KEY`, plus a platform webhook (`checkout.session.completed`, `account.updated`) pointing at `{KR_PUBLIC_URL}/api/webhooks/platform` with its secret in `KR_PLATFORM_STRIPE_WEBHOOK_SECRET`. Without it, everything except Stripe payouts still works, and manual payouts with CSV export are available.
 
+Plan billing (what Kickrail charges programs) can use a separate Stripe account: `KR_BILLING_STRIPE_SECRET_KEY`, plus a webhook (`checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`) pointing at `{KR_PUBLIC_URL}/api/webhooks/billing` with its secret in `KR_BILLING_STRIPE_WEBHOOK_SECRET`. That account may be shared with other products: events that aren't for a Kickrail program are acknowledged and ignored. Prices are looked up by lookup key `kickrail_<plan>_<month|year>` and must exist before checkout. `KR_STRIPE_MANAGED_PAYMENTS=true` turns on Stripe Managed Payments for Checkout (it then needs `KR_BILLING_STRIPE_SECRET_KEY`, with no fallback to the platform key), and `KR_STRIPE_PORTAL_CONFIGURATION` picks the billing portal configuration.
+
 ## Merchant integration
 
 1. **Connect Stripe.** In Settings, paste a restricted key. Kickrail stores it encrypted and creates its own webhook endpoint on the merchant's account.
