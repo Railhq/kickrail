@@ -1,17 +1,17 @@
 import Link from "next/link";
-import { openBillingPortal, startCheckout } from "@/app/actions";
+import { movePass, openBillingPortal, startCheckout } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { Badge, Card, Notice } from "@/components/ui";
 import { api } from "@/lib/backend";
 import { date, money } from "@/lib/format";
 import { planFeatures, UNLIMITED } from "@/lib/plans";
-import type { BillingInfo, PlanSummary } from "@/lib/types";
+import type { BillingInfo, PassWorkspaces, PlanSummary } from "@/lib/types";
 
 export const metadata = { title: "Billing" };
 
 function statusLine(p: PlanSummary) {
   if (p.comped) return "Kickrail is free for this program.";
-  if (p.source === "pass") return `Included in your Railhq Pass: ${p.name} at no charge while the owner's Pass is active.`;
+  if (p.source === "pass") return `Included in your Railhq Pass: ${p.name} at no charge while the owner's Pass is active and covers this program.`;
   if (p.status === "trialing" && p.trial_ends_at) {
     const days = Math.max(0, Math.ceil((new Date(p.trial_ends_at).getTime() - Date.now()) / 86_400_000));
     return p.subscribed ? `Trial: your card is charged on ${date(p.trial_ends_at)}.` : `Free trial of ${p.name}: ${days} ${days === 1 ? "day" : "days"} left, no card needed. After that the program moves to Free unless you pick a plan.`;
@@ -26,6 +26,7 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
   const sp = await searchParams;
   const interval = sp.interval === "year" ? "year" : "month";
   const b = await api<BillingInfo>("/merchant/billing");
+  const pass = b.railhq_pass ? await api<PassWorkspaces>("/railhq/pass-workspaces") : null;
   const p = b.plan;
   const cap = b.usage.cap_cents;
   const pct = cap ? Math.min(100, Math.round((b.usage.this_month_cents / cap) * 100)) : 0;
@@ -40,6 +41,8 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
           {p.suggested_plan && ` The ${b.plans.find((x) => x.id === p.suggested_plan)?.name} plan fits your volume.`}
         </Notice>
       )}
+
+      {b.railhq_pass && !b.railhq_pass.covered && <Notice><PassFull n={b.railhq_pass.workspaces} /></Notice>}
 
       <Card
         title={<span className="flex items-center gap-2">{p.name} plan {p.status === "trialing" && <Badge tone="amber">trial</Badge>}{p.status === "past_due" && <Badge tone="red">past due</Badge>}{p.comped && <Badge tone="green">comped</Badge>}</span>}
@@ -68,6 +71,8 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
           <Usage label="Portal domains" used={b.domains} limit={p.limits.domains} />
         </div>
       </Card>
+
+      {pass && pass.pass && <PassCard pass={pass} />}
 
       {!p.comped && (
         <>
@@ -110,6 +115,50 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
         </>
       )}
     </div>
+  );
+}
+
+const UPGRADE = "https://accounts.getrailhq.com/billing";
+
+function PassFull({ n }: { n: number }) {
+  return (
+    <>
+      Your Pass covers {n} {n === 1 ? "workspace and it's" : "workspaces and they're"} in use. Move {n === 1 ? "it" : "one"} here, or upgrade at{" "}
+      <a className="link" href={UPGRADE}>accounts.getrailhq.com/billing</a>.
+    </>
+  );
+}
+
+function PassCard({ pass }: { pass: PassWorkspaces }) {
+  const covered = pass.programs.filter((x) => x.covered);
+  const full = pass.used >= pass.workspaces;
+  return (
+    <Card title="Railhq Pass">
+      <p className="text-sm">
+        {pass.used} of {pass.workspaces} Pass {pass.workspaces === 1 ? "workspace" : "workspaces"} used. A covered program gets Starter at no charge; a paid plan above it wins.{" "}
+        Need more? <a className="link" href={UPGRADE}>Upgrade your Pass</a>.
+      </p>
+      <ul className="mt-4 divide-y divide-line rounded-xl border border-line text-sm">
+        {pass.programs.map((x) => (
+          <li key={x.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
+            <span className="flex items-center gap-2">
+              <span className="font-medium">{x.name}</span>
+              {x.covered ? <Badge tone="green">covered</Badge> : <Badge>not covered</Badge>}
+            </span>
+            {!x.covered && (
+              <ActionForm action={movePass.bind(null, x.id, covered.map((c) => c.id))} className="flex flex-wrap items-center gap-2">
+                {full && covered.length > 0 && (
+                  <select className="input w-auto" name="release" defaultValue={covered[covered.length - 1].id} aria-label="Program to take off the Pass">
+                    {covered.map((c) => <option key={c.id} value={c.id}>Instead of {c.name}</option>)}
+                  </select>
+                )}
+                <Submit variant="secondary">Move here</Submit>
+              </ActionForm>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 

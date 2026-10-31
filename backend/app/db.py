@@ -161,6 +161,9 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
     }
     await _migrate_portal_domains(db)
     await _migrate_referral_indexes(db)
+    from .services.pass_coverage import backfill
+
+    await backfill(db)  # the Pass used to cover every owned program
     for name, indexes in specs.items():
         for keys, opts in indexes:
             await db[name].create_index(keys, **opts)

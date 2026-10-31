@@ -205,6 +205,16 @@ export async function startCheckout(plan: string, interval: string): Promise<Sta
   return { ok: "Plan changed. The difference is prorated on your next invoice." };
 }
 
+/** Puts `target` on the owner's Railhq Pass, taking the `release` program off it when every slot is in use. */
+export async function movePass(target: string, covered: string[], _: State, f: FormData): Promise<State> {
+  const release = str(f, "release");
+  const picks = [...covered.filter((id) => id !== release && id !== target), target];
+  const r = await attempt(() => api("/railhq/pass-workspaces", { method: "PUT", body: { workspace_ids: picks } }));
+  if (r.error) return { error: r.error };
+  revalidatePath("/dashboard", "layout");
+  return { ok: "Pass coverage moved." };
+}
+
 export async function openBillingPortal(): Promise<State> {
   const r = await attempt(() => api<{ url: string }>("/merchant/billing/portal", { method: "POST" }));
   if (r.error) return { error: r.error };

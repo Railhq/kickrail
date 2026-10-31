@@ -24,7 +24,7 @@ from ..security import MAX_PROGRAMS, can_be_paid, current_merchant, current_user
 from ..serializers import affiliate_url, code_obj, join_url, link_obj, portal_base
 from ..services import audit, fx, notify
 from ..services import payouts as payout_svc
-from ..services import deletion, rewardful_import, rewards, stripe_sync, terms
+from ..services import deletion, pass_coverage, rewardful_import, rewards, stripe_sync, terms
 from ..services.exports import EXPORTS
 from ..services.affiliates import AffiliateError, add_by_email, add_code, add_link, affiliate_view, check_landing, click_count, sync_campaign_codes, sync_promotion_code
 from ..services.notify import EMAIL_KINDS
@@ -120,8 +120,6 @@ async def create_merchant(body: MerchantIn, user=Depends(current_user), db=Depen
         "plan": plans.new_trial(now),
         "created_at": now,
     }
-    if user.get("railhq_pass"):
-        merchant["railhq_pass"] = True
     for attempt in range(5):
         merchant["slug"] = base if attempt == 0 else f"{base}-{random_id(4).lower()}"
         try:
@@ -131,6 +129,8 @@ async def create_merchant(body: MerchantIn, user=Depends(current_user), db=Depen
             continue
     else:
         raise HTTPException(409, "could not pick a unique program URL")
+    await pass_coverage.refresh(db, user["_id"])
+    merchant = await db.merchants.find_one({"_id": merchant["_id"]})
     await db.campaigns.insert_one(
         {
             "_id": new_id("cmp"),

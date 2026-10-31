@@ -14,6 +14,8 @@ the switch are moved over the first time they sign in with their old password.
     POST /auth/railhq/callback   the code Railhq sent the browser back with
     POST /railhq/backchannel     Railhq signing someone out everywhere
     POST /railhq/events          account changes and the Railhq Pass
+    GET  /railhq/pass-workspaces which owned programs the Pass covers
+    PUT  /railhq/pass-workspaces pick them (owner only, at most the Pass's count)
 
 The web app keeps the `flow` from start in an httpOnly cookie and hands it to callback.
 Railhq reaches the last two through the web app's /api proxy."""
@@ -30,7 +32,9 @@ from pydantic import BaseModel, Field
 from ..config import get_settings
 from ..ids import new_id
 from ..railhq import Railhq, RailhqError
-from ..security import SESSION_DAYS, db_dep, issue_token, public_user
+from ..security import SESSION_DAYS, current_user, db_dep, issue_token, public_user
+from ..services import pass_coverage
+from ..services.pass_coverage import set_pass, workspaces_from
 
 log = logging.getLogger("kickrail.railhq")
 router = APIRouter(tags=["railhq"])
@@ -70,11 +74,6 @@ def handoff(handoff_token: str, next_path: str | None) -> dict:
     return {"railhq_handoff": rh.handoff_url(handoff_token, path), "railhq_flow": flow}
 
 
-async def set_pass(db, user_id: str, on: bool) -> None:
-    await db.users.update_one({"_id": user_id}, {"$set": {"railhq_pass": on}})
-    await db.merchants.update_many({"owner_id": user_id}, {"$set": {"railhq_pass": on}})
-
-
 def _later() -> datetime:
     return datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1)
 
@@ -100,7 +99,7 @@ async def link(db, who: dict, proven: bool = False) -> dict:
             raise HTTPException(403, "confirm your email first: Railhq sent you a link. Then sign in again")
     if not user:
         name = (who.get("name") or email.split("@")[0]).strip()[:100]
-        user = {"_id": new_id("usr"), "email": email, "name": name, "railhq_id": sub, "railhq_pass": bool(who.get("pass")), "ip_hashes": [], "email_verified": verified, "created_at": datetime.now(UTC)}
+        user = {"_id": new_id("usr"), "email": email, "name": name, "railhq_id": sub, "railhq_pass": bool(who.get("pass")), "railhq_pass_workspaces": workspaces_from(who), "ip_hashes": [], "email_verified": verified, "created_at": datetime.now(UTC)}
         await db.users.insert_one(user)
         return user
     s: dict = {"railhq_id": sub}
@@ -109,8 +108,8 @@ async def link(db, who: dict, proven: bool = False) -> dict:
     if user["email"] != email and verified and not await db.users.find_one({"email": email, "_id": {"$ne": user["_id"]}}):
         s["email"] = email  # changed (and confirmed) at Railhq since we last saw them
     await db.users.update_one({"_id": user["_id"]}, {"$set": s})
-    if bool(user.get("railhq_pass")) != bool(who.get("pass")):
-        await set_pass(db, user["_id"], bool(who.get("pass")))
+    if bool(user.get("railhq_pass")) != bool(who.get("pass")) or user.get("railhq_pass_workspaces") != workspaces_from(who):
+        await set_pass(db, user["_id"], bool(who.get("pass")), workspaces_from(who))
     return await db.users.find_one({"_id": user["_id"]})
 
 
@@ -192,6 +191,47 @@ async def events(request: Request, db=Depends(db_dep)):
         await db.users.update_one({"_id": user["_id"]}, {"$unset": {"railhq_id": ""}, "$set": {"signed_out_at": _later()}})
         await set_pass(db, user["_id"], False)
     elif e["type"] == "pass.updated":
-        await set_pass(db, user["_id"], bool(e["data"].get("pass")))
+        await set_pass(db, user["_id"], bool(e["data"].get("pass")), workspaces_from(e["data"]))
     # orgs.updated: Kickrail programs aren't linked to Railhq organizations.
     return {"ok": True}
+
+
+def _coverage(user: dict, programs: list[dict], covered: list[str]) -> dict:
+    n = pass_coverage.allowance(user)
+    return {
+        "pass": n > 0,
+        "workspaces": n,
+        "used": len(covered),
+        "programs": [{"id": m["_id"], "name": m.get("name", ""), "created_at": m.get("created_at"), "covered": m["_id"] in covered} for m in programs],
+    }
+
+
+@router.get("/railhq/pass-workspaces")
+async def pass_workspaces(user=Depends(current_user), db=Depends(db_dep)):
+    """The programs this person owns and which ones their Railhq Pass covers."""
+    programs = await pass_coverage.owned(db, user["_id"])
+    return _coverage(user, programs, pass_coverage.choose(user, programs))
+
+
+class PassPickIn(BaseModel):
+    workspace_ids: list[str] = Field(max_length=50)
+
+
+@router.put("/railhq/pass-workspaces")
+async def pick_pass_workspaces(body: PassPickIn, user=Depends(current_user), db=Depends(db_dep)):
+    """Choose which owned programs the Pass covers, in order. Slots left over go to the
+    oldest owned programs."""
+    n = pass_coverage.allowance(user)
+    if not n:
+        raise HTTPException(400, "you don't have a Railhq Pass")
+    picks = list(dict.fromkeys(body.workspace_ids))
+    if len(picks) > n:
+        raise HTTPException(400, f"your Pass covers {n} workspace{'s' if n != 1 else ''}. Upgrade at accounts.getrailhq.com/billing to cover more")
+    programs = await pass_coverage.owned(db, user["_id"])
+    mine = {m["_id"] for m in programs}
+    if any(p not in mine for p in picks):
+        raise HTTPException(403, "only a program's owner can put it on their Pass")
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"railhq_pass_pick": picks}})
+    user = await db.users.find_one({"_id": user["_id"]})
+    covered = await pass_coverage.refresh(db, user["_id"])
+    return _coverage(user, await pass_coverage.owned(db, user["_id"]), covered)

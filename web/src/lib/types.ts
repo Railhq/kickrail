@@ -31,7 +31,7 @@ export type PlanSummary = {
   id: PlanId;
   name: string;
   status: "active" | "trialing" | "trial_ended" | "past_due" | "comped" | string;
-  /** "pass": the owner's Railhq Pass covers this plan. */
+  /** "pass": the owner's Railhq Pass covers this program (one of the 1, 3 or 10 it covers). */
   source?: string;
   comped: boolean;
   trial_ends_at: string | null;
@@ -71,6 +71,16 @@ export type BillingInfo = {
   domains: number;
   enabled: boolean;
   can_manage: boolean;
+  /** For an owner with a Railhq Pass: how many programs it covers and whether this one is. */
+  railhq_pass: { workspaces: number; covered: boolean } | null;
+};
+
+/** The programs a Railhq Pass holder owns and which ones the Pass covers. */
+export type PassWorkspaces = {
+  pass: boolean;
+  workspaces: number;
+  used: number;
+  programs: { id: string; name: string; created_at: string; covered: boolean }[];
 };
 
 export type Branding = { logo_url?: string | null; favicon_url?: string | null; color?: string | null; headline?: string | null; description?: string | null; welcome_message?: string | null; terms_url?: string | null; reply_to?: string | null };

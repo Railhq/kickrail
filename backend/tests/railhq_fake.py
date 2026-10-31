@@ -7,6 +7,7 @@ key, and lets a test mint what the real service would send.
     fake.add_user("a@b.com", "password123", verified=True)
     code = fake.code_for(sub, nonce)          # what /authorize would have redirected with
     fake.logout_token(sub, sid); fake.event("user.updated", {"sub": sub}); fake.access_token(sub)
+    fake.set_pass(sub, "team"); fake.event("pass.updated", fake.pub(fake.users[sub]))
 """
 
 import base64
@@ -40,7 +41,7 @@ class FakeRailhq:
     def add_user(self, email: str, password: str | None = "password123", name: str = "", verified: bool = True, password_hash: str | None = None) -> dict:
         sub = "usr_" + secrets.token_hex(6)
         h = password_hash or (bcrypt.hashpw(password.encode(), bcrypt.gensalt(4)).decode() if password else None)
-        u = {"sub": sub, "email": email.strip().lower(), "name": name, "email_verified": verified, "pass": False, "_hash": h}
+        u = {"sub": sub, "email": email.strip().lower(), "name": name, "email_verified": verified, "pass": False, "pass_tier": None, "pass_workspaces": 0, "_hash": h}
         self.users[sub] = u
         return self.pub(u)
 
@@ -49,7 +50,14 @@ class FakeRailhq:
 
     @staticmethod
     def pub(u: dict) -> dict:
-        return {k: u[k] for k in ("sub", "email", "email_verified", "name", "pass")}
+        return {k: u[k] for k in ("sub", "email", "email_verified", "name", "pass", "pass_tier", "pass_workspaces")}
+
+    TIERS = {"pass": 1, "team": 3, "agency": 10}
+
+    def set_pass(self, sub: str, tier: str | None = "pass") -> dict:
+        """Give (tier) or take away (None) this person's Pass, like a Stripe webhook would."""
+        self.users[sub] |= {"pass": bool(tier), "pass_tier": tier, "pass_workspaces": self.TIERS[tier] if tier else 0}
+        return self.pub(self.users[sub])
 
     def sign(self, claims: dict, ttl: int = 600, typ: str = "JWT") -> str:
         now = int(time.time())

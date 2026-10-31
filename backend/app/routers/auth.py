@@ -18,6 +18,7 @@ from ..ids import new_id, random_id, sha256
 from ..railhq import RailhqError
 from ..security import MAX_PROGRAMS, OPERATOR, check_password, client_ip, client_ip_hash, db_dep, email_verified, hash_password, issue_token, public_user, selected_merchant, session_claims, signed_in_user
 from ..services.notify import account_email
+from ..services.pass_coverage import workspaces_from
 from . import railhq
 
 log = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ async def signup(body: SignupIn, request: Request, db=Depends(db_dep)):
                 raise HTTPException(409, f"you already have a Railhq account{f' (used for {apps})' if apps else ''}. Sign in with it")
             raise HTTPException(e.status if e.status in (422, 429) else 503, e.message)
         who = got["user"]
-        user |= {"railhq_id": who["sub"], "railhq_pass": bool(who.get("pass")), "email_verified": bool(who.get("email_verified"))}
+        user |= {"railhq_id": who["sub"], "railhq_pass": bool(who.get("pass")), "railhq_pass_workspaces": workspaces_from(who), "email_verified": bool(who.get("email_verified"))}
         user.pop("password_hash")  # Railhq holds it
         out = railhq.handoff(got["handoff"], body.next)
     try:
