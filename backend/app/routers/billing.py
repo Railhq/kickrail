@@ -11,7 +11,7 @@ from .. import plans
 from ..config import get_settings
 from ..deps import billing_api
 from ..security import current_merchant, current_user, db_dep
-from ..services import billing
+from ..services import billing, pass_coverage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/merchant/billing", tags=["billing"])
@@ -34,6 +34,8 @@ async def overview(m=Depends(current_merchant), user=Depends(current_user), db=D
         "domains": len(m.get("portal_domains") or []),
         "enabled": bool(get_settings().billing_key),
         "can_manage": user["_id"] == m.get("owner_id"),
+        # For an owner with a Railhq Pass: how many programs it covers and whether this is one.
+        "railhq_pass": {"workspaces": n, "covered": bool(m.get("railhq_pass"))} if (n := pass_coverage.allowance(user)) and user["_id"] == m.get("owner_id") else None,
     }
 
 

@@ -32,7 +32,8 @@ PLANS: dict[str, dict] = {
 }
 PAID = ["starter", "growth", "scale"]
 ORDER = ["free", *PAID]
-# What the owner's Railhq Pass (merchants.railhq_pass) gives a program on the free plan.
+# What the owner's Railhq Pass gives a program it covers (merchants.railhq_pass, kept by
+# services/pass_coverage.py) on the free plan. A Pass covers 1, 3 or 10 programs by tier.
 PASS_PLAN = PAID[0]
 
 # What a gate's 402 says, and the cheapest plan that has it.
@@ -71,7 +72,7 @@ def current(m: dict, now: datetime | None = None) -> dict:
     elif status == "trialing" and not p.get("stripe_subscription") and (not trial_ends or trial_ends <= now):
         pid, status = "free", "trial_ended"
     if pid == "free" and m.get("railhq_pass"):
-        # The owner's Railhq Pass covers Starter; a paid or trial plan above it wins.
+        # Covered by the owner's Railhq Pass: Starter. A paid or trial plan above it wins.
         return {**PLANS[PASS_PLAN], "id": PASS_PLAN, "status": "active", "source": "pass", "comped": False, "trial_ends_at": None, "interval": None,
                 "current_period_end": None, "cancel_at_period_end": False, "subscribed": False}
     return {

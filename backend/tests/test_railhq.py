@@ -255,3 +255,120 @@ async def test_mcp_through_the_gateway(client, db, fake):
 
 async def test_mcp_gateway_off_by_default(client, db):
     assert (await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers={"authorization": "Bearer eyJhbGciOi.fake.token"})).status_code == 401
+
+
+async def _pass_holder(client, db, fake, programs: int, tier: str = "pass") -> tuple[dict, dict, list[str]]:
+    """An operator owning `programs` programs (oldest first, all on Free), then given a Pass."""
+    from datetime import UTC, datetime, timedelta
+
+    who = fake.add_user(email())
+    h = auth((await sso(client, fake, who["sub"])).json()["token"])
+    ids = []
+    for i in range(programs):
+        m = (await client.post("/merchant", json={"name": f"Tier {i}", "website": f"https://t{i}.example"}, headers=h)).json()["merchant"]
+        await db.merchants.update_one({"_id": m["id"]}, {"$set": {"plan": {"id": "free", "status": "active"}, "created_at": datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=i)}})
+        ids.append(m["id"])
+    assert (await client.post("/railhq/events", content=fake.event("pass.updated", fake.set_pass(who["sub"], tier)))).status_code == 200
+    return who, h, ids
+
+
+async def _covered(db, ids: list[str]) -> list[str]:
+    return [i for i in ids if (await db.merchants.find_one({"_id": i}))["railhq_pass"]]
+
+
+async def _plan(client, h, mid) -> dict:
+    return (await client.get("/merchant", headers=h | {"x-kickrail-program": mid})).json()["plan"]
+
+
+async def test_pass_covers_only_the_oldest(client, db, fake):
+    who, h, ids = await _pass_holder(client, db, fake, 3)
+    assert (await db.users.find_one({"railhq_id": who["sub"]}))["railhq_pass_workspaces"] == 1
+    assert await _covered(db, ids) == ids[:1]
+    assert (await _plan(client, h, ids[0]))["source"] == "pass"
+    # Uncovered falls back to its own plan, and billing says why.
+    assert (await _plan(client, h, ids[1]))["id"] == "free"
+    b = (await client.get("/merchant/billing", headers=h | {"x-kickrail-program": ids[1]})).json()
+    assert b["railhq_pass"] == {"workspaces": 1, "covered": False}
+    got = (await client.get("/railhq/pass-workspaces", headers=h)).json()
+    assert got["workspaces"] == 1 and got["used"] == 1 and [p["covered"] for p in got["programs"]] == [True, False, False]
+
+
+async def test_team_pass_covers_three(client, db, fake):
+    who, h, ids = await _pass_holder(client, db, fake, 4, "team")
+    assert await _covered(db, ids) == ids[:3]
+    assert [(await _plan(client, h, i))["id"] for i in ids] == ["starter", "starter", "starter", "free"]
+    # The ID token carries the count too.
+    await sso(client, fake, who["sub"])
+    assert (await db.users.find_one({"railhq_id": who["sub"]}))["railhq_pass_workspaces"] == 3
+
+
+async def test_pick_moves_coverage(client, db, fake):
+    who, h, ids = await _pass_holder(client, db, fake, 3)
+    r = await client.put("/railhq/pass-workspaces", json={"workspace_ids": [ids[2]]}, headers=h)
+    assert r.status_code == 200, r.text
+    assert await _covered(db, ids) == [ids[2]]
+    assert (await _plan(client, h, ids[0]))["id"] == "free" and (await _plan(client, h, ids[2]))["source"] == "pass"
+    # An upgrade fills the new slots from the oldest, keeping the pick.
+    await client.post("/railhq/events", content=fake.event("pass.updated", fake.set_pass(who["sub"], "team")))
+    assert set(await _covered(db, ids)) == set(ids)
+
+
+async def test_picks_over_the_count_or_not_owned_are_refused(client, db, fake):
+    who, h, ids = await _pass_holder(client, db, fake, 3)
+    assert (await client.put("/railhq/pass-workspaces", json={"workspace_ids": ids[1:]}, headers=h)).status_code == 400
+    # A member who doesn't own the program can't put it on their own Pass.
+    mate = fake.add_user(email())
+    mh = auth((await sso(client, fake, mate["sub"])).json()["token"])
+    mate_id = (await db.users.find_one({"railhq_id": mate["sub"]}))["_id"]
+    await db.merchants.update_one({"_id": ids[1]}, {"$addToSet": {"member_ids": mate_id}})
+    await client.post("/railhq/events", content=fake.event("pass.updated", fake.set_pass(mate["sub"], "pass")))
+    assert (await client.put("/railhq/pass-workspaces", json={"workspace_ids": [ids[1]]}, headers=mh)).status_code == 403
+    assert (await client.get("/merchant/billing", headers=mh | {"x-kickrail-program": ids[1]})).json()["railhq_pass"] is None
+    # No Pass at all.
+    await client.post("/railhq/events", content=fake.event("pass.updated", fake.set_pass(mate["sub"], None)))
+    assert (await client.put("/railhq/pass-workspaces", json={"workspace_ids": []}, headers=mh)).status_code == 400
+    assert await _covered(db, ids) == ids[:1]
+
+
+async def test_pass_removed_covers_none(client, db, fake):
+    who, h, ids = await _pass_holder(client, db, fake, 2, "team")
+    assert await _covered(db, ids) == ids
+    await client.post("/railhq/events", content=fake.event("pass.updated", fake.set_pass(who["sub"], None)))
+    assert await _covered(db, ids) == []
+    assert (await db.users.find_one({"railhq_id": who["sub"]}))["railhq_pass_workspaces"] == 0
+    assert [(await _plan(client, h, i))["id"] for i in ids] == ["free", "free"]
+
+
+async def test_losing_a_covered_program_frees_the_slot(client, db, fake):
+    from app.services import pass_coverage
+
+    who, h, ids = await _pass_holder(client, db, fake, 3)
+    uid = (await db.users.find_one({"railhq_id": who["sub"]}))["_id"]
+    await client.put("/railhq/pass-workspaces", json={"workspace_ids": [ids[1]]}, headers=h)
+    assert await _covered(db, ids) == [ids[1]]
+    # Deleted (there's no delete route yet; anything that deletes calls refresh): the oldest left takes the slot.
+    await db.merchants.delete_one({"_id": ids[1]})
+    await pass_coverage.refresh(db, uid)
+    assert await _covered(db, [ids[0], ids[2]]) == [ids[0]]
+    # Handed to a teammate: the old owner's next oldest takes it.
+    mate = fake.add_user(email())
+    await sso(client, fake, mate["sub"])
+    mate_id = (await db.users.find_one({"railhq_id": mate["sub"]}))["_id"]
+    await db.merchants.update_one({"_id": ids[0]}, {"$addToSet": {"member_ids": mate_id}})
+    assert (await client.post("/merchant/team/owner", json={"user_id": mate_id}, headers=h | {"x-kickrail-program": ids[0]})).status_code == 200
+    assert await _covered(db, [ids[0], ids[2]]) == [ids[2]]
+
+
+async def test_old_boolean_pass_counts_as_one(client, db, fake):
+    from app.services import pass_coverage
+
+    who, h, ids = await _pass_holder(client, db, fake, 2)
+    uid = (await db.users.find_one({"railhq_id": who["sub"]}))["_id"]
+    # Before tiers: the boolean only, and every owned program marked.
+    await db.users.update_one({"_id": uid}, {"$unset": {"railhq_pass_workspaces": ""}})
+    await db.merchants.update_many({"_id": {"$in": ids}}, {"$set": {"railhq_pass": True}})
+    await pass_coverage.backfill(db)
+    assert await _covered(db, ids) == ids[:1]
+    # A pass.updated without a count (an older accounts service) is a one-workspace Pass.
+    await client.post("/railhq/events", content=fake.event("pass.updated", {"sub": who["sub"], "pass": True}))
+    assert (await db.users.find_one({"_id": uid}))["railhq_pass_workspaces"] == 1
