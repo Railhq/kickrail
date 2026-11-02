@@ -83,7 +83,7 @@ export type PassWorkspaces = {
   programs: { id: string; name: string; created_at: string; covered: boolean }[];
 };
 
-export type Branding = { logo_url?: string | null; favicon_url?: string | null; color?: string | null; headline?: string | null; description?: string | null; welcome_message?: string | null; terms_url?: string | null; reply_to?: string | null };
+export type Branding = { logo_url?: string | null; favicon_url?: string | null; color?: string | null; headline?: string | null; description?: string | null; welcome_message?: string | null; terms_url?: string | null; reply_to?: string | null; show_powered_by?: boolean };
 
 export type Rule = { type: "percent"; bps: number } | { type: "flat"; cents: number; currency: string } | { type: "none" };
 

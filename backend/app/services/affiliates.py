@@ -39,8 +39,8 @@ def program_public(m: dict, campaign: dict | None) -> dict:
         "branding": {k: b.get(k) for k in ("logo_url", "favicon_url", "color", "headline", "description", "welcome_message", "terms_url")},
         # A hosted terms page, written in the dashboard. An external terms_url wins over it.
         "has_terms": bool(m.get("terms")),
-        # Free and Starter programs show "Powered by Kickrail" on the join page and portal.
-        "powered_by": plans.current(m)["branding"],
+        # Free and Starter programs show "Powered by Kickrail" on the join page and portal; higher plans can opt in.
+        "powered_by": plans.current(m)["branding"] or bool(b.get("show_powered_by")),
     }
 
 

@@ -162,7 +162,7 @@ export async function saveEmailSettings(_: State, f: FormData): Promise<State> {
 
 export async function saveBranding(_: State, f: FormData): Promise<State> {
   const body = Object.fromEntries(["logo_url", "favicon_url", "color", "headline", "description", "welcome_message", "reply_to"].map((k) => [k, str(f, k) || null]));
-  const r = await attempt(() => api("/merchant/branding", { method: "PUT", body: { ...body, headline: body.headline ?? "", description: body.description ?? "", welcome_message: body.welcome_message ?? "" } }));
+  const r = await attempt(() => api("/merchant/branding", { method: "PUT", body: { ...body, headline: body.headline ?? "", description: body.description ?? "", welcome_message: body.welcome_message ?? "", show_powered_by: f.get("show_powered_by") === "on" } }));
   revalidatePath("/dashboard", "layout");
   return r.error ? { error: r.error } : { ok: "Saved" };
 }
