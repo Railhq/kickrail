@@ -13,6 +13,11 @@ os.environ.update(
     KR_PUBLIC_URL="https://kickrail.test",
     KR_PLATFORM_STRIPE_WEBHOOK_SECRET="whsec_platform",
     KR_PLATFORM_STRIPE_SECRET_KEY="",
+    KR_PLATFORM_STRIPE_CONNECT_WEBHOOK_SECRET="",
+    KR_BILLING_STRIPE_SECRET_KEY="",
+    KR_BILLING_STRIPE_WEBHOOK_SECRET="whsec_billing",
+    KR_STRIPE_MANAGED_PAYMENTS="false",
+    KR_STRIPE_PORTAL_CONFIGURATION="",
     KR_DEV_WEBHOOK_SECRET="",
     KR_DISPATCHER="false",
     # Never inherit the real mail setup from .env.

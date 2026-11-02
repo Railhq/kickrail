@@ -22,8 +22,15 @@ class Settings(BaseSettings):
     platform_stripe_webhook_secret: str = ""
     # Kickrail charging programs for their plan. Falls back to the platform key; set it
     # alone (e.g. a billing-only restricted key) to bill without turning on Connect payouts.
+    # The billing account may be shared with other products: its webhook endpoint is
+    # /webhooks/billing, and events that aren't for a Kickrail program are ignored.
     billing_stripe_secret_key: str = ""
     billing_stripe_webhook_secret: str = ""
+    # Stripe Managed Payments (Stripe as merchant of record) on billing Checkout. Needs its
+    # own billing key: with it on there is no fallback to the platform key.
+    stripe_managed_payments: bool = False
+    # Billing portal configuration (bpc_...) to use. Empty: find or create one tagged kr=billing.
+    stripe_portal_configuration: str = ""
     # Secret of the Connect endpoint (account.updated for affiliate accounts), if separate.
     platform_stripe_connect_webhook_secret: str = ""
     # One-click "Connect with Stripe" for merchants (Connect OAuth, Standard accounts).
@@ -75,6 +82,8 @@ class Settings(BaseSettings):
 
     @property
     def billing_key(self) -> str:
+        if self.stripe_managed_payments:
+            return self.billing_stripe_secret_key
         return self.billing_stripe_secret_key or self.platform_stripe_secret_key
 
     @property

@@ -1,9 +1,9 @@
-"""Kickrail charging programs for their plan, on Kickrail's own (platform) Stripe account.
+"""Kickrail charging programs for their plan, on the billing Stripe account.
 
-Prices are found by lookup key (kickrail_<plan>_<month|year>) and created the first
-time they're needed, so a fresh Stripe account needs no setup. A program's plan is
-whatever its subscription says (synced from webhooks); without one it's on the free
-plan, or on the no-card Growth trial while that lasts.
+Prices are found by lookup key (kickrail_<plan>_<month|year>) and must already exist:
+billing never creates products or prices, and a missing price is a clear setup error.
+A program's plan is whatever its subscription says (synced from webhooks); without one
+it's on the free plan, or on the no-card Growth trial while that lasts.
 
 The revenue meter adds up referred revenue per calendar month, in USD at rough fixed
 rates. Going over the plan's cap never stops tracking: after two full months over,
@@ -119,9 +119,48 @@ async def _over_limit_email(db: AsyncDatabase, m: dict, u: dict) -> None:
 
 # ---------- Stripe ----------
 
+# Marks Kickrail's sessions and subscriptions on a billing account other products share.
+PRODUCT = "kickrail"
+BRAND = "Kickrail"
+SUBSCRIPTION_EVENTS = ("customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted")
+
+# Checkout Session parameters Stripe refuses with Managed Payments (subscription mode).
+# https://docs.stripe.com/payments/managed-payments/update-checkout
+MP_UNSUPPORTED = ("adaptive_pricing", "automatic_tax", "tax_id_collection", "payment_method_configuration", "payment_method_types",
+                  "shipping_address_collection", "shipping_options", "invoice_creation")
+MP_UNSUPPORTED_SUB = ("default_tax_rates", "application_fee_percent", "on_behalf_of", "transfer_data", "invoice_settings")
+
+
+class BillingSetupError(RuntimeError):
+    """Billing is misconfigured (no key, a missing price): shown as a 503."""
+
+
+def price_lookup_key(plan: str, interval: str) -> str:
+    return f"kickrail_{plan}_{interval}"
+
+
+def managed_payments_params(params: dict) -> dict:
+    """Checkout params with Managed Payments on and what it doesn't allow taken out."""
+    out = {k: v for k, v in params.items() if k not in MP_UNSUPPORTED}
+    cu = {k: v for k, v in (out.pop("customer_update", None) or {}).items() if k not in ("name", "address")}
+    if cu:
+        out["customer_update"] = cu
+    if "subscription_data" in out:
+        out["subscription_data"] = {k: v for k, v in out["subscription_data"].items() if k not in MP_UNSUPPORTED_SUB}
+    return out | {"managed_payments": {"enabled": True}}
+
+
+def branding() -> dict:
+    """The name (and logo, when served over https) on the Checkout page, whoever owns the account."""
+    b: dict = {"display_name": BRAND}
+    base = get_settings().public_url.rstrip("/")
+    if base.startswith("https://"):
+        b["logo"] = {"type": "url", "url": f"{base}/icon-512.png"}
+    return b
+
 
 class Billing:
-    """Kickrail's own Stripe account, for charging programs."""
+    """The Stripe account Kickrail charges programs on. Prices are looked up, never created."""
 
     _prices: dict[str, str] = {}
 
@@ -130,51 +169,57 @@ class Billing:
 
         key = key or get_settings().billing_key
         if not key:
-            raise RuntimeError("billing isn't set up on this Kickrail instance")
+            raise BillingSetupError("billing isn't set up on this Kickrail instance")
         self.c = stripe.StripeClient(key, http_client=stripe.HTTPXClient(allow_sync_methods=False))
 
     async def price_id(self, plan: str, interval: str) -> str:
-        import stripe
-
-        lookup = f"kickrail_{plan}_{interval}"
+        lookup = price_lookup_key(plan, interval)
         if lookup in self._prices:
             return self._prices[lookup]
         found = await self.c.v1.prices.list_async({"lookup_keys": [lookup], "active": True, "limit": 1})
-        if found.data:
-            price = found.data[0].id
-        else:
-            info = plans.PLANS[plan]
-            try:
-                product = (await self.c.v1.products.retrieve_async(f"kickrail_{plan}")).id
-            except stripe.InvalidRequestError:
-                product = (await self.c.v1.products.create_async({"id": f"kickrail_{plan}", "name": f"Kickrail {info['name']}", "metadata": {"kr_plan": plan}})).id
-            price = (
-                await self.c.v1.prices.create_async(
-                    {
-                        "product": product, "currency": "usd", "unit_amount": info[interval] * 100, "recurring": {"interval": interval},
-                        "lookup_key": lookup, "metadata": {"kr_plan": plan}, "nickname": f"{info['name']} {interval}ly",
-                    }
-                )
-            ).id
-        self._prices[lookup] = price
-        return price
+        if not found.data:
+            log.error("billing price %s is missing", lookup)
+            raise BillingSetupError(f"billing isn't set up: no active Stripe price with lookup key {lookup}")
+        price = found.data[0]
+        if (price.recurring or {}).get("interval") != interval:
+            raise BillingSetupError(f"billing isn't set up: Stripe price {lookup} isn't billed per {interval}")
+        want = plans.PLANS[plan][interval] * 100
+        if price.currency != "usd" or price.unit_amount != want:
+            log.warning("billing price %s is %s %s, plans.py says usd %s", lookup, price.currency, price.unit_amount, want)
+        self._prices[lookup] = price.id
+        return price.id
 
     async def checkout(self, *, merchant_id: str, customer: str | None, email: str, price: str, trial_end: int | None, success_url: str, cancel_url: str) -> str:
-        sub: dict = {"metadata": {"kr_merchant": merchant_id}}
+        import stripe
+
+        meta = {"kr_merchant": merchant_id, "product": PRODUCT}
+        sub: dict = {"metadata": meta}
         if trial_end:
             sub["trial_end"] = trial_end
         params: dict = {
             "mode": "subscription",
             "line_items": [{"price": price, "quantity": 1}],
             "subscription_data": sub,
-            "metadata": {"kr_merchant": merchant_id},
+            "metadata": meta,
             "client_reference_id": merchant_id,
             "allow_promotion_codes": True,
+            "branding_settings": branding(),
             "success_url": success_url,
             "cancel_url": cancel_url,
         }
-        params |= {"customer": customer} if customer else {"customer_email": email}
-        s = await self.c.v1.checkout.sessions.create_async(params)  # type: ignore[arg-type]
+        if get_settings().stripe_managed_payments:
+            params = managed_payments_params(params)
+        if customer:
+            try:
+                s = await self.c.v1.checkout.sessions.create_async(params | {"customer": customer})  # type: ignore[arg-type]
+                return s.url or ""
+            except stripe.InvalidRequestError as e:
+                # A customer id stored before billing moved to another Stripe account doesn't exist
+                # there. Checkout makes a new customer; its id is stored when the session completes.
+                if e.code != "resource_missing" or e.param != "customer":
+                    raise
+                log.info("billing customer %s not on this account, checkout makes a new one", customer)
+        s = await self.c.v1.checkout.sessions.create_async(params | {"customer_email": email})  # type: ignore[arg-type]
         return s.url or ""
 
     async def change_price(self, subscription_id: str, price: str) -> dict:
@@ -186,25 +231,29 @@ class Billing:
         return new.to_dict()
 
     async def portal(self, customer: str, return_url: str) -> str:
-        configs = await self.c.v1.billing_portal.configurations.list_async({"active": True, "limit": 10})
-        config = next((c.id for c in configs.data if (c.metadata or {}).get("kr") == "billing"), None)
-        if not config:
-            config = (
-                await self.c.v1.billing_portal.configurations.create_async(
-                    {
-                        "business_profile": {"headline": "Kickrail billing"},
-                        "features": {
-                            "invoice_history": {"enabled": True},
-                            "payment_method_update": {"enabled": True},
-                            "customer_update": {"enabled": True, "allowed_updates": ["email", "address", "tax_id", "name"]},
-                            "subscription_cancel": {"enabled": True, "mode": "at_period_end"},
-                        },
-                        "metadata": {"kr": "billing"},
-                    }
-                )
-            ).id
+        config = get_settings().stripe_portal_configuration or await self._portal_configuration()
         s = await self.c.v1.billing_portal.sessions.create_async({"customer": customer, "return_url": return_url, "configuration": config})
         return s.url
+
+    async def _portal_configuration(self) -> str:
+        configs = await self.c.v1.billing_portal.configurations.list_async({"active": True, "limit": 10})
+        config = next((c.id for c in configs.data if (c.metadata or {}).get("kr") == "billing"), None)
+        if config:
+            return config
+        return (
+            await self.c.v1.billing_portal.configurations.create_async(
+                {
+                    "business_profile": {"headline": "Kickrail billing"},
+                    "features": {
+                        "invoice_history": {"enabled": True},
+                        "payment_method_update": {"enabled": True},
+                        "customer_update": {"enabled": True, "allowed_updates": ["email", "address", "tax_id", "name"]},
+                        "subscription_cancel": {"enabled": True, "mode": "at_period_end"},
+                    },
+                    "metadata": {"kr": "billing"},
+                }
+            )
+        ).id
 
 
 def _ts(v) -> datetime | None:
@@ -251,14 +300,47 @@ async def apply_subscription(db: AsyncDatabase, sub: dict, *, deleted: bool = Fa
     return f"{pid} {status}"
 
 
+async def owner_of(db: AsyncDatabase, event: dict) -> str | None:
+    """The program a billing event is for, or None when it isn't Kickrail's.
+
+    The billing account can be shared with other products, so an event only counts when
+    it is a kind Kickrail bills with, isn't tagged for another product, and points at a
+    program here (kr_merchant metadata, or a subscription a program already has).
+    Reads only; never raises on an odd payload."""
+    kind = event.get("type")
+    obj = (event.get("data") or {}).get("object") or {}
+    if not isinstance(obj, dict):
+        return None
+    meta = obj.get("metadata") or {}
+    if meta.get("product") not in (None, PRODUCT):
+        return None
+    mid = meta.get("kr_merchant")
+    if kind == "checkout.session.completed":
+        if obj.get("mode") != "subscription" or not isinstance(mid, str):
+            return None
+        m = await db.merchants.find_one({"_id": mid}, {"_id": 1})
+    elif kind in SUBSCRIPTION_EVENTS:
+        if isinstance(mid, str):
+            m = await db.merchants.find_one({"_id": mid}, {"_id": 1})
+        elif isinstance(obj.get("id"), str):
+            m = await db.merchants.find_one({"plan.stripe_subscription": obj["id"]}, {"_id": 1})
+        else:
+            m = None
+    else:
+        return None
+    return m["_id"] if m else None
+
+
 async def handle_event(db: AsyncDatabase, event: dict) -> str | None:
-    """Platform webhook events about Kickrail's own billing; None if it isn't one."""
+    """Events about Kickrail's own billing; None if it isn't one."""
     obj, kind = event["data"]["object"], event["type"]
-    if kind == "checkout.session.completed" and (obj.get("metadata") or {}).get("kr_merchant") and obj.get("mode") == "subscription":
+    meta = obj.get("metadata") or {}
+    if meta.get("product") not in (None, PRODUCT):
+        return None
+    if kind == "checkout.session.completed" and meta.get("kr_merchant") and obj.get("mode") == "subscription":
         # The plan itself comes with customer.subscription.created.
-        await db.merchants.update_one({"_id": obj["metadata"]["kr_merchant"]}, {"$set": {"plan.stripe_customer": obj.get("customer")}})
+        await db.merchants.update_one({"_id": meta["kr_merchant"]}, {"$set": {"plan.stripe_customer": obj.get("customer")}})
         return "checkout recorded"
-    if kind in ("customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"):
+    if kind in SUBSCRIPTION_EVENTS:
         return await apply_subscription(db, obj, deleted=kind.endswith("deleted"), at=event.get("created"))
     return None
-

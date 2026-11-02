@@ -56,7 +56,10 @@ async def checkout(body: CheckoutIn, m=Depends(current_merchant), user=Depends(c
     if m.get("comped"):
         raise HTTPException(409, "this program is on Kickrail for free")
     p = m.get("plan") or {}
-    price = await api.price_id(body.plan, body.interval)
+    try:
+        price = await api.price_id(body.plan, body.interval)
+    except billing.BillingSetupError as e:
+        raise HTTPException(503, str(e))
     if plans.current(m)["subscribed"]:
         sub = await api.change_price(p["stripe_subscription"], price)
         outcome = await billing.apply_subscription(db, sub)
