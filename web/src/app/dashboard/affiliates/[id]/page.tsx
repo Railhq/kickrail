@@ -27,7 +27,10 @@ export default async function AffiliateDetail({ params, searchParams }: { params
     <div className="space-y-8">
       <div>
         <Link href="/dashboard/affiliates" className="eyebrow hover:text-fg">← Affiliates</Link>
-        <h1 className="page-title mt-3">{view.affiliate.name || view.affiliate.email}</h1>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="page-title">{view.affiliate.name || view.affiliate.email}</h1>
+          <Link href={`/view-as/${id}`} className="btn btn-secondary">View as affiliate</Link>
+        </div>
         <p className="text-sm text-muted">{view.affiliate.email}{a.tax_form && <> · tax form <Badge tone="green">{a.tax_form.toUpperCase().replace("W8", "W-8").replace("W9", "W-9")}</Badge></>}</p>
       </div>
 

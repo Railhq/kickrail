@@ -66,7 +66,7 @@ export async function middleware(req: NextRequest) {
   // Kickrail's blog is proxied in next.config; it doesn't belong on a merchant's domain.
   if (pathname === "/blog" || pathname.startsWith("/blog/")) return new NextResponse("Not found", { status: 404 });
   // The merchant dashboard stays on Kickrail's own domain.
-  if (pathname === "/" || pathname === "/join" || pathname.startsWith("/dashboard") || pathname.startsWith("/onboarding")) {
+  if (pathname === "/" || pathname === "/join" || pathname.startsWith("/dashboard") || pathname.startsWith("/onboarding") || pathname.startsWith("/view-as")) {
     return NextResponse.rewrite(new URL(`/join/${slug}`, req.url), { request: { headers } });
   }
   // partners.example.com/join/creators is that campaign's own join page.

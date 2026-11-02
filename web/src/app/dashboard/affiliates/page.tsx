@@ -125,7 +125,7 @@ export default async function AffiliatesPage({ searchParams }: { searchParams: P
                 </td>
                 <td className="px-3 py-3 first:pl-5 last:pr-5">
                   <div className="flex w-24 flex-col items-stretch gap-1.5">
-                    <Link href={`/dashboard/affiliates/${a.id}`} className="btn btn-secondary btn-sm whitespace-nowrap">View as</Link>
+                    <Link href={`/view-as/${a.id}`} className="btn btn-secondary btn-sm whitespace-nowrap">View as</Link>
                     {a.status !== "approved" && (
                       <form action={setAffiliateStatus.bind(null, a.id, "approved")}><button className="btn btn-primary btn-sm w-full">Approve</button></form>
                     )}
