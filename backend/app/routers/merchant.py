@@ -203,6 +203,8 @@ class BrandingIn(BaseModel):
     welcome_message: str = Field(default="", max_length=1000)
     terms_url: HttpUrl | None = None
     reply_to: str | None = Field(default=None, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    # Opt in to the "Powered by Kickrail" footer on a plan that hides it. Free and Starter always show it.
+    show_powered_by: bool | None = None
 
 
 @router.put("/branding")

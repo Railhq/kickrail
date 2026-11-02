@@ -183,6 +183,16 @@ stripe.customers.create({ email, metadata: { kr_ref: req.cookies.kr_ref } });`;
           <div className="sm:col-span-2"><Field label="Join page description"><textarea className="input min-h-20" name="description" maxLength={2000} defaultValue={m.branding.description ?? ""} /></Field></div>
           <div className="sm:col-span-2"><Field label="Welcome message" hint="Added to the approval email and shown at the top of an approved affiliate's portal."><textarea className="input min-h-16" name="welcome_message" maxLength={1000} defaultValue={m.branding.welcome_message ?? ""} /></Field></div>
           <Field label="Reply-to email" hint="Where affiliate replies go. Defaults to the workspace owner."><input className="input" name="reply_to" type="email" defaultValue={m.branding.reply_to ?? ""} /></Field>
+          <div className="sm:col-span-2">
+            {m.plan.branding ? (
+              <p className="text-sm text-muted">Your join page and portal show &ldquo;Powered by Kickrail&rdquo;. Growth and Scale can hide it.</p>
+            ) : (
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" name="show_powered_by" className="mt-1" defaultChecked={!!m.branding.show_powered_by} />
+                <span><b>Show &ldquo;Powered by Kickrail&rdquo;</b> <span className="text-muted">at the bottom of your join page and portal. Hidden on your plan unless you turn it on.</span></span>
+              </label>
+            )}
+          </div>
           <div className="sm:col-span-2"><Submit>Save branding</Submit></div>
         </ActionForm>
       </Card>

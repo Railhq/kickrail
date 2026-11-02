@@ -117,6 +117,11 @@ async def test_checkout_and_subscription_sync(client, db, prog, fake_billing):
     assert fake_billing.changes[-1] == ("sub_1", "price_growth_month")
     assert (await client.get("/merchant", headers=h)).json()["plan"]["id"] == "growth"
     assert (await client.get("/programs/billco")).json()["powered_by"] is False
+    # A higher plan can opt back in, and out again.
+    await client.put("/merchant/branding", json={"show_powered_by": True}, headers=h)
+    assert (await client.get("/programs/billco")).json()["powered_by"] is True
+    await client.put("/merchant/branding", json={"show_powered_by": False}, headers=h)
+    assert (await client.get("/programs/billco")).json()["powered_by"] is False
     # An event older than what we have is ignored.
     old = int((datetime.now(UTC) - timedelta(hours=1)).timestamp())
     assert (await platform_event(client, "customer.subscription.updated", sub_obj(prog["id"], "starter"), created=old)).json()["outcome"] == "stale event"
