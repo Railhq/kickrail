@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { api, portalSlug, siteUrl } from "@/lib/backend";
+import { withIdp } from "@/lib/railhqGoogle";
 import { RAILHQ_FLOW_COOKIE, RAILHQ_TRIED_COOKIE } from "@/lib/session";
 
 /**
@@ -20,7 +21,7 @@ export async function GET(req: NextRequest) {
   } catch {
     return back;
   }
-  const res = NextResponse.redirect(r.url, 303);
+  const res = NextResponse.redirect(withIdp(r.url, sp), 303);
   const secure = process.env.NODE_ENV === "production";
   res.cookies.set(RAILHQ_FLOW_COOKIE, r.flow, { httpOnly: true, sameSite: "lax", secure, path: "/", maxAge: 600 });
   // One silent try per few minutes, so "not signed in to Railhq" doesn't loop.

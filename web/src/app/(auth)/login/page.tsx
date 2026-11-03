@@ -3,8 +3,10 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { login } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
+import { GoogleButton } from "@/components/GoogleButton";
 import { Field } from "@/components/ui";
 import { api, partnerContext } from "@/lib/backend";
+import { railhqGoogle } from "@/lib/railhqGoogle";
 import { PARTNER_COOKIE, RAILHQ_TRIED_COOKIE, SESSION_COOKIE } from "@/lib/session";
 
 export const metadata = { title: "Sign in" };
@@ -22,6 +24,7 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
   const { next = "", error } = await searchParams;
   // Affiliates sign in here too, with their own login; Railhq is only for the dashboard.
   const railhq = !(await partnerContext(next)) && (await railhqOn());
+  const google = railhq && (await railhqGoogle());
   const q = next ? `?next=${encodeURIComponent(next)}` : "";
   if (railhq && !error) {
     const jar = await cookies();
@@ -33,9 +36,10 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
       <h1 className="font-display text-3xl tracking-tight">Sign in</h1>
       <p className="mt-1 text-sm text-muted">One account for your program and every program you promote.</p>
       {error === "railhq" && <p className="mt-4 text-sm text-red-600">Signing in with Railhq didn&apos;t work. Try again, or use your email and password.</p>}
+      {google && <GoogleButton next={next || "/home"} />}
       {railhq && (
         <>
-          <a className="btn btn-secondary mt-6 w-full" href={`/auth/railhq/start?prompt=login&next=${encodeURIComponent(next || "/home")}`}>Continue with Railhq</a>
+          <a className={`btn btn-secondary ${google ? "mt-3" : "mt-6"} w-full`} href={`/auth/railhq/start?prompt=login&next=${encodeURIComponent(next || "/home")}`}>Continue with Railhq</a>
           <p className="mt-4 text-center text-xs text-muted">or with your email</p>
         </>
       )}
