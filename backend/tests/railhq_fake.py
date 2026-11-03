@@ -34,6 +34,8 @@ class FakeRailhq:
         self.orgs: dict[str, list] = {}
         self.codes: dict[str, dict] = {}
         self.calls: list[tuple[str, str, dict]] = []
+        # Set to refuse sign-ups and resets whose proof of work isn't this answer, like accounts with RH_POW_REQUIRED.
+        self.pow_answer: str | None = None
         self.transport = httpx.MockTransport(self._handle)
 
     # ---------- test helpers ----------
@@ -100,6 +102,8 @@ class FakeRailhq:
             u = self.users[c["sub"]]
             idt = self.sign(self.pub(u) | {"aud": self.client_id, "nonce": c["nonce"], "sid": "sid_" + secrets.token_hex(6), "auth_time": int(time.time())})
             return httpx.Response(200, json={"id_token": idt, "access_token": self.access_token(u["sub"]), "token_type": "Bearer", "expires_in": 3600})
+        if path in ("/api/signup", "/api/forgot") and self.pow_answer is not None and body.get("pow") != self.pow_answer:
+            return httpx.Response(400, json={"detail": {"code": "pow", "message": "your browser didn't finish the sign-up check"}})
         if path == "/api/signup":
             if self.by_email(body["email"]):
                 return httpx.Response(409, json={"detail": {"code": "exists", "message": "a Railhq account with this email already exists", "apps": self.existing_apps}})

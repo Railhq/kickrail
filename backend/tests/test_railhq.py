@@ -90,6 +90,18 @@ async def test_signup_makes_a_railhq_account(client, db, fake):
     assert not await db.users.find_one({"email": other})
 
 
+async def test_signup_and_forgot_pass_the_proof_of_work(client, db, fake):
+    fake.pow_answer = "solved"
+    e = email()
+    r = await client.post("/auth/signup", json={"email": e, "password": "password123", "name": "Bot"})
+    assert r.status_code == 400 and "sign-up check" in r.json()["detail"]
+    assert not await db.users.find_one({"email": e})
+    r = await client.post("/auth/signup", json={"email": e, "password": "password123", "name": "Ray", "pow": "solved"})
+    assert r.status_code == 200, r.text
+    assert (await client.post("/auth/password/forgot", json={"email": e})).status_code == 400
+    assert (await client.post("/auth/password/forgot", json={"email": e, "pow": "solved"})).json() == {"ok": True}
+
+
 async def test_login_links_and_imports(client, db, fake, monkeypatch):
     # 404 at Railhq: the local password is right, so the hash moves over as is.
     a = await local_operator(client, db, monkeypatch)

@@ -31,6 +31,7 @@ class SignupIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     next: str | None = Field(default=None, max_length=300)
     site: str | None = Field(default=None, max_length=300)
+    pow: str = Field(default="", max_length=1000)  # Railhq's proof of work (web/src/lib/pow.ts)
 
 
 class LoginIn(BaseModel):
@@ -40,6 +41,7 @@ class LoginIn(BaseModel):
 
 
 WRONG = "wrong email or password"
+POW = "your browser didn't finish the sign-up check. Reload the page and try again"
 
 
 async def _session(db, user: dict, request: Request, coll: str = "users", kind: str = OPERATOR, railhq_sid: str | None = None) -> dict:
@@ -89,8 +91,10 @@ async def signup(body: SignupIn, request: Request, db=Depends(db_dep)):
             raise HTTPException(409, "an account with that email already exists. Sign in, or reset your password")
         # The Railhq account holds the password and sends the confirmation email.
         try:
-            got = await railhq.client().signup(email, body.password, body.name.strip(), client_ip(request))
+            got = await railhq.client().signup(email, body.password, body.name.strip(), client_ip(request), body.pow)
         except RailhqError as e:
+            if e.code == "pow":
+                raise HTTPException(400, POW)
             if e.code == "exists":
                 apps = ", ".join(e.body.get("apps") or [])
                 raise HTTPException(409, f"you already have a Railhq account{f' (used for {apps})' if apps else ''}. Sign in with it")
@@ -292,6 +296,7 @@ async def resend(db, coll: str, user: dict, body: ResendIn) -> dict:
 class ForgotIn(BaseModel):
     email: EmailStr
     site: str | None = Field(default=None, max_length=300)
+    pow: str = Field(default="", max_length=1000)
 
 
 @router.post("/password/forgot")
@@ -302,8 +307,10 @@ async def forgot_password(body: ForgotIn, db=Depends(db_dep)):
         # Railhq holds the password (or may: someone who signed up in another Railhq tool).
         # An affiliate's email is never sent there.
         try:
-            await railhq.client().forgot(body.email.lower())
+            await railhq.client().forgot(body.email.lower(), body.pow)
         except RailhqError as e:
+            if e.code == "pow":
+                raise HTTPException(400, POW)
             log.warning("railhq forgot failed: %s", e.message)
         return {"ok": True}
     return await send_reset(db, "users", user, body.site)
