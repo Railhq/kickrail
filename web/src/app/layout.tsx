@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Instrument_Serif } from "next/font/google";
+import { PathrailTag } from "@/components/Pathrail";
 import "./globals.css";
+
+const PATHRAIL_SITE = process.env.NEXT_PUBLIC_PATHRAIL_SITE || "pr_W8KFAzDx3WV0Htta";
 
 const sans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const mono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -14,6 +17,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
+      <head>
+        <PathrailTag site={PATHRAIL_SITE} host="kickrail.com" skip="^/(a|join|view-as)(/|$)" />
+      </head>
       <body className={`${sans.variable} ${mono.variable} ${display.variable} font-sans antialiased`}>{children}</body>
     </html>
   );

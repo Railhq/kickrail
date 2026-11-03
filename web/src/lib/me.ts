@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { authed, maybe } from "./backend";
 
 export type Me = {
-  user: { id: string; email: string; name: string; payouts_enabled: boolean; can_be_paid: boolean; email_verified: boolean };
+  user: { id: string; email: string; name: string; payouts_enabled: boolean; can_be_paid: boolean; email_verified: boolean; created_at?: string | null };
   /** The program the dashboard is on; `merchants` is every program the user runs. */
   merchant: { id: string; name: string; slug: string } | null;
   merchants: { id: string; name: string; slug: string }[];

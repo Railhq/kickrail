@@ -154,7 +154,7 @@ async def api_merchant(authorization: str = Header(default=""), db: AsyncDatabas
 
 def public_user(u: dict) -> dict:
     """An operator or a partner, the same shape for both."""
-    return {"id": u["_id"], "email": u["email"], "name": u.get("name", ""), "payouts_enabled": bool(u.get("payouts_enabled")), "can_be_paid": can_be_paid(u), "email_verified": email_verified(u)}
+    return {"id": u["_id"], "email": u["email"], "name": u.get("name", ""), "payouts_enabled": bool(u.get("payouts_enabled")), "can_be_paid": can_be_paid(u), "email_verified": email_verified(u), "created_at": u.get("created_at")}
 
 
 def can_be_paid(u: dict) -> bool:

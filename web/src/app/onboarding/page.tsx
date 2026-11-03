@@ -4,6 +4,7 @@ import { createWorkspace } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { Logo } from "@/components/Logo";
 import { Field } from "@/components/ui";
+import { PathrailUser } from "@/components/Pathrail";
 import { affiliations, getMe } from "@/lib/me";
 
 export const metadata = { title: "Set up your program" };
@@ -14,6 +15,7 @@ export default async function Onboarding({ searchParams }: { searchParams: Promi
   if (me.merchant && !another) redirect("/dashboard");
   return (
     <div className="mx-auto max-w-lg px-4 py-12">
+      <PathrailUser user={me.user} />
       <Logo href="/home" />
       <h1 className="mt-10 page-title">{another ? "Add another program" : "Set up your affiliate program"}</h1>
       <p className="mt-2 text-sm text-muted">
