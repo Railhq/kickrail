@@ -5,7 +5,7 @@
 // browser solves it in about a second while they type; a script that only posts the form
 // never gets an account or makes us email a stranger.
 
-import { useCallback, useEffect, useRef } from "react";
+import { createElement, useCallback, useEffect, useRef } from "react";
 
 const POW_URL = process.env.NEXT_PUBLIC_RAILHQ_POW_URL || "https://accounts.getrailhq.com/api/pow";
 const STALE_MS = 15 * 60 * 1000; // challenges last 20 minutes
@@ -32,10 +32,20 @@ export async function railhqPow(): Promise<string> {
   return solve(await r.json());
 }
 
-/** Starts solving when the form mounts; `answer()` resolves to the `pow` field to send
- * (empty if it failed, and the server then says to reload). Each answer works once, so
- * call `answer()` once per submit. */
-export function usePow(): () => Promise<string> {
+// A text field people never see or reach. Bots that fill in every input fill it too, and
+// their submit then sends "trap", which the server refuses (and counts) like a missing answer.
+const TRAP = "rh_extra";
+const hidden = { position: "absolute", left: "-10000px", width: 1, height: 1, overflow: "hidden" } as const;
+
+/** Put inside each form that sends `pow`. */
+export function PowTrap() {
+  return createElement("input", { type: "text", name: TRAP, tabIndex: -1, autoComplete: "off", "aria-hidden": true, defaultValue: "", style: hidden });
+}
+
+/** Starts solving when the form mounts; `answer(form)` resolves to the `pow` field to send
+ * (empty if it failed, and the server then says to reload) and takes the trap field out of
+ * the form data. Each answer works once, so call `answer()` once per submit. */
+export function usePow(): (f?: FormData) => Promise<string> {
   const job = useRef<{ at: number; p: Promise<string> } | null>(null);
   const start = useCallback(() => {
     job.current = { at: Date.now(), p: railhqPow().catch(() => "") };
@@ -43,7 +53,10 @@ export function usePow(): () => Promise<string> {
   useEffect(() => {
     if (!job.current) start();
   }, [start]);
-  return useCallback(async () => {
+  return useCallback(async (f?: FormData) => {
+    const trapped = String(f?.get(TRAP) ?? "") !== "";
+    f?.delete(TRAP);
+    if (trapped) return "trap";
     if (!job.current || Date.now() - job.current.at > STALE_MS) start();
     const p = job.current!.p;
     start(); // the next submit (after an error) needs a fresh answer

@@ -3,7 +3,7 @@
 import { useActionState, useCallback } from "react";
 import { useFormStatus } from "react-dom";
 import type { State } from "@/app/actions";
-import { usePow } from "@/lib/pow";
+import { PowTrap, usePow } from "@/lib/pow";
 import { CopyButton } from "./CopyButton";
 
 export function ActionForm({
@@ -45,12 +45,17 @@ export function PowActionForm(props: React.ComponentProps<typeof ActionForm>) {
   const { action } = props;
   const withPow = useCallback(
     async (prev: State, f: FormData) => {
-      f.set("pow", await answer());
+      f.set("pow", await answer(f));
       return action(prev, f);
     },
     [action, answer],
   );
-  return <ActionForm {...props} action={withPow} />;
+  return (
+    <ActionForm {...props} action={withPow}>
+      {props.children}
+      <PowTrap />
+    </ActionForm>
+  );
 }
 
 export function Submit({ children, variant = "primary", className = "" }: { children: React.ReactNode; variant?: "primary" | "secondary" | "danger"; className?: string }) {
