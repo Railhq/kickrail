@@ -45,7 +45,7 @@ export async function signup(_: State, f: FormData): Promise<State> {
   const partner = await partnerContext(str(f, "next"));
   const next = safeNext(str(f, "next"), partner ? "/a" : "/onboarding");
   const site = await siteUrl(); // emailed links open on this host (Kickrail or a portal domain)
-  const body = { name: str(f, "name"), email: str(f, "email"), password: str(f, "password"), next, site };
+  const body = { name: str(f, "name"), email: str(f, "email"), password: str(f, "password"), next, site, pow: str(f, "pow") };
   const r = await attempt(() => api<Session>(partner ? "/partner/auth/signup" : "/auth/signup", { auth: false, body }));
   if (r.error) return { error: r.error };
   if (partner) await setPartnerSession(r.value!.token);
@@ -65,7 +65,7 @@ export async function resendVerification(_: State, f: FormData): Promise<State> 
 
 export async function forgotPassword(_: State, f: FormData): Promise<State> {
   const site = await siteUrl();
-  const body = { email: str(f, "email"), site };
+  const body = { email: str(f, "email"), site, pow: str(f, "pow") };
   // Either login may have this address; each sends its own link, or nothing.
   const sides = (await partnerContext(str(f, "next"))) ? ["/partner/auth"] : ["/auth", "/partner/auth"];
   const r = await Promise.all(sides.map((p) => attempt(() => api(`${p}/password/forgot`, { auth: false, body }))));

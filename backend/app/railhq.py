@@ -129,8 +129,9 @@ class Railhq:
 
     # ---------- server to server ----------
 
-    async def signup(self, email: str, password: str, name: str = "", ip: str = "") -> dict:
-        return await self._call("POST", "/api/signup", json={"email": email, "password": password, "name": name, "ip": ip})
+    async def signup(self, email: str, password: str, name: str = "", ip: str = "", pow: str = "") -> dict:
+        """`pow`: the proof-of-work answer the person's browser sent with the form (pow_url)."""
+        return await self._call("POST", "/api/signup", json={"email": email, "password": password, "name": name, "ip": ip, "pow": pow})
 
     async def login(self, email: str, password: str, ip: str = "") -> dict:
         return await self._call("POST", "/api/login", json={"email": email, "password": password, "ip": ip})
@@ -138,8 +139,13 @@ class Railhq:
     async def import_user(self, email: str, name: str, password_hash: str | None, email_verified: bool) -> dict:
         return await self._call("POST", "/api/import", json={"email": email, "name": name, "password_hash": password_hash, "email_verified": email_verified})
 
-    async def forgot(self, email: str) -> dict:
-        return await self._call("POST", "/api/forgot", json={"email": email})
+    async def forgot(self, email: str, pow: str = "") -> dict:
+        return await self._call("POST", "/api/forgot", json={"email": email, "pow": pow})
+
+    @property
+    def pow_url(self) -> str:
+        """Where the sign-up and reset pages fetch their proof-of-work challenge."""
+        return f"{self.issuer}/api/pow"
 
     async def user(self, sub: str) -> dict:
         return await self._call("GET", f"/api/users/{sub}")
