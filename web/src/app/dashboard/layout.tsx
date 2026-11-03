@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { logout } from "@/app/actions";
 import { Logo } from "@/components/Logo";
+import { PathrailUser } from "@/components/Pathrail";
 import { api } from "@/lib/backend";
 import { affiliations, getMe } from "@/lib/me";
 import type { PlanSummary } from "@/lib/types";
@@ -34,6 +35,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </aside>
       <main className="min-w-0 flex-1">
         <div className="mx-auto max-w-7xl p-4 sm:p-6 md:px-10 md:py-10">
+          <PathrailUser user={me.user} />
           <PlanBanner plan={plan} />
           {children}
         </div>
