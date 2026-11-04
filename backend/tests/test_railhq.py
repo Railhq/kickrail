@@ -225,6 +225,29 @@ async def test_events_update_email_and_pass(client, db, fake):
     await client.post("/railhq/events", content=fake.event("user.deleted", {"sub": who["sub"]}))
     assert (await client.get("/auth/me", headers=auth(tok))).status_code == 401
     assert await db.merchants.find_one({"_id": m["id"]})
+    kept = await db.users.find_one({"email": new})
+    assert kept and "railhq_id" not in kept
+
+
+async def test_deleted_with_nothing_here_is_removed(client, db, fake):
+    who = fake.add_user(email())
+    tok = (await sso(client, fake, who["sub"])).json()["token"]
+    uid = (await db.users.find_one({"railhq_id": who["sub"]}))["_id"]
+    assert (await client.post("/railhq/events", content=fake.event("user.deleted", {"sub": who["sub"]}))).status_code == 200
+    assert not await db.users.find_one({"_id": uid})
+    assert (await client.get("/auth/me", headers=auth(tok))).status_code == 401
+
+    # A teammate on someone else's program has data here, so is only unlinked.
+    owner = fake.add_user(email())
+    otok = (await sso(client, fake, owner["sub"])).json()["token"]
+    m = (await client.post("/merchant", json={"name": "Teamco", "website": "https://teamco.example"}, headers=auth(otok))).json()["merchant"]
+    mate = fake.add_user(email())
+    await sso(client, fake, mate["sub"])
+    mate_id = (await db.users.find_one({"railhq_id": mate["sub"]}))["_id"]
+    await db.merchants.update_one({"_id": m["id"]}, {"$addToSet": {"member_ids": mate_id}})
+    await client.post("/railhq/events", content=fake.event("user.deleted", {"sub": mate["sub"]}))
+    u = await db.users.find_one({"_id": mate_id})
+    assert u and "railhq_id" not in u
 
 
 async def test_pass_follows_ownership(client, db, fake):
