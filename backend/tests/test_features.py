@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app import deps
+from app.config import get_settings
 from app.services import outbox
 
 from app.db import get_db
@@ -331,6 +332,11 @@ async def test_tax_form_gates_payouts(client, db):
 
 
 async def test_paypal_payout(client, db, fakes):
+    creds = {"client_id": "AbCdEf1234567890", "secret": "s3cr3t-s3cr3t", "mode": "sandbox"}
+    # Sending from Kickrail is off until the program opts in.
+    assert (await client.put("/merchant/paypal", json=creds, headers=owner())).status_code == 403
+    assert (await client.post("/merchant/payouts", json={"currency": "usd", "method": "paypal"}, headers=owner())).status_code == 403
+    assert (await client.patch("/merchant", json={"send_payouts": True}, headers=owner())).status_code == 200
     assert (await client.post("/merchant/payouts", json={"currency": "usd", "method": "paypal"}, headers=owner())).status_code == 400  # not connected
     r = await client.put("/merchant/paypal", json={"client_id": "AbCdEf1234567890", "secret": "s3cr3t-s3cr3t", "mode": "sandbox"}, headers=owner())
     assert r.status_code == 200 and r.json()["paypal"]["mode"] == "sandbox" and "secret" not in str(r.json()["paypal"])
@@ -488,3 +494,15 @@ async def test_one_account_runs_several_programs(client, db):
     for i in range(8):  # 10 created in all; joining a team doesn't count
         assert (await client.post("/merchant", json={"name": f"P{i}", "website": "https://p.example"}, headers=h)).status_code == 200
     assert (await client.post("/merchant", json={"name": "One too many", "website": "https://p.example"}, headers=h)).status_code == 409
+
+
+async def test_sending_payouts_needs_the_instance_flag(client, db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "payouts", False)
+    await db.merchants.update_many({}, {"$set": {"settings.send_payouts": False}})
+    assert (await client.get("/merchant", headers=owner())).json()["payouts_available"] is False
+    assert (await client.patch("/merchant", json={"send_payouts": True}, headers=owner())).status_code == 403
+    # Opted in earlier, then the flag went off: sending stops, recording a payout still works.
+    await db.merchants.update_many({}, {"$set": {"settings.send_payouts": True}})
+    p = (await client.get("/merchant/payouts", headers=owner())).json()
+    assert p["send_payouts"] is False and p["stripe_payouts"] is False
+    assert (await client.post("/merchant/payouts", json={"currency": "usd", "method": "paypal"}, headers=owner())).status_code == 403

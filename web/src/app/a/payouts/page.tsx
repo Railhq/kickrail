@@ -17,6 +17,7 @@ type Account = {
   connected: boolean;
   payouts_enabled: boolean;
   stripe_payouts: boolean;
+  connect_countries: string[];
 };
 type Status = {
   payouts_enabled: boolean;
@@ -133,7 +134,7 @@ export default async function PayoutSetup() {
         <p className="text-sm text-muted">
           Some programs pay through Stripe instead. Stripe verifies your
           identity once and deposits to your bank, and this one account works
-          for every program you join.
+          for every program you join. Available in {acct.connect_countries.join(" and ")}; anywhere else, save a PayPal email above.
         </p>
         {s.unavailable && (
           <p className="mt-3 text-sm text-red-700">
@@ -162,10 +163,10 @@ export default async function PayoutSetup() {
                 <select
                   name="country"
                   className="input w-auto"
-                  defaultValue="US"
+                  defaultValue={acct.connect_countries[0]}
                   aria-label="Country"
                 >
-                  {["US", "CA"].map((c) => (
+                  {acct.connect_countries.map((c) => (
                     <option key={c}>{c}</option>
                   ))}
                 </select>

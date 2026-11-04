@@ -12,7 +12,7 @@ export const metadata = { title: "Payouts" };
 
 export default async function PayoutsPage({ searchParams }: { searchParams: Promise<{ funded?: string; cancelled?: string }> }) {
   const sp = await searchParams;
-  const { payable, upcoming, history, fee_bps, paypal_connected, stripe_payouts } = await api<{ payable: PayableLine[]; upcoming: UpcomingLine[]; history: Payout[]; fee_bps: number; paypal_connected: boolean; stripe_payouts: boolean }>("/merchant/payouts");
+  const { payable, upcoming, history, fee_bps, paypal_connected, send_payouts, stripe_payouts } = await api<{ payable: PayableLine[]; upcoming: UpcomingLine[]; history: Payout[]; fee_bps: number; paypal_connected: boolean; send_payouts: boolean; stripe_payouts: boolean }>("/merchant/payouts");
   const currencies = [...new Set(payable.map((l) => l.currency))];
   return (
     <div className="space-y-6">
@@ -76,7 +76,7 @@ export default async function PayoutsPage({ searchParams }: { searchParams: Prom
                 </label>
                 <Submit>Mark ticked as paid</Submit>
               </ActionForm>
-              {paypal_connected && viaPayPal.length > 0 && (
+              {send_payouts && paypal_connected && viaPayPal.length > 0 && (
                 <ActionForm action={createPayout} className="mt-4 border-t border-line pt-4">
                   <input type="hidden" name="currency" value={cur} />
                   <input type="hidden" name="method" value="paypal" />
@@ -87,7 +87,7 @@ export default async function PayoutsPage({ searchParams }: { searchParams: Prom
                   <Submit variant="secondary" className="mt-3">Send with PayPal</Submit>
                 </ActionForm>
               )}
-              {!paypal_connected && viaPayPal.length > 0 && (
+              {send_payouts && !paypal_connected && viaPayPal.length > 0 && (
                 <p className="mt-4 border-t border-line pt-4 text-sm text-muted">
                   {viaPayPal.length} of these use PayPal. <Link className="link" href="/dashboard/settings">Connect PayPal</Link> to pay them in one batch.
                 </p>
@@ -153,6 +153,7 @@ export default async function PayoutsPage({ searchParams }: { searchParams: Prom
                   <StatusBadge status={p.status} />
                   {p.items.filter((i) => i.error).map((i) => <p key={i.affiliate_id} className="mt-1 text-xs text-red-700">{i.error}</p>)}
                   {p.method === "paypal" && p.status === "processing" && <p className="mt-1 text-xs text-muted">{p.items.filter((i) => i.status === "paid").length} of {p.items.length} confirmed</p>}
+                  {p.method === "paypal" && p.items.some((i) => i.status === "pending" && i.paypal_state === "UNCLAIMED") && <p className="mt-1 text-xs text-muted">{p.items.filter((i) => i.status === "pending" && i.paypal_state === "UNCLAIMED").length} waiting for the affiliate to open a PayPal account. PayPal returns unclaimed money after 30 days and those commissions become payable again.</p>}
                 </td>
                 <td className="px-5 py-3 num">{p.items.length}</td>
                 <td className="px-5 py-3 num">{money(p.total_cents, p.currency)}</td>

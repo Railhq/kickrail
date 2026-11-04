@@ -1,4 +1,4 @@
-import { addDomain, connectPayPal, disconnectPayPal, makePrimaryDomain, removeDomain, saveBranding, saveEmailSettings, updateSettings, verifyDomain } from "@/app/actions";
+import { addDomain, connectPayPal, disconnectPayPal, makePrimaryDomain, removeDomain, saveBranding, saveEmailSettings, setSendPayouts, updateSettings, verifyDomain } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/ActionForm";
 import { CopyButton } from "@/components/CopyButton";
 import { Badge, Card, Code, Field, Notice } from "@/components/ui";
@@ -251,30 +251,43 @@ stripe.customers.create({ email, metadata: { kr_ref: req.cookies.kr_ref } });`;
         </ActionForm>
       </Card>
 
-      <Card title="PayPal payouts" actions={m.paypal && <Badge tone={m.paypal.mode === "live" ? "green" : "amber"}>{m.paypal.mode}</Badge>}>
-        {m.paypal ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-sunk/50 p-3 text-sm">
-            <span>Connected app <span className="font-mono text-xs">{m.paypal.client_id_hint}</span> since {date(m.paypal.connected_at)}</span>
-            <form action={disconnectPayPal}><button className="btn btn-danger">Disconnect</button></form>
-          </div>
-        ) : (
-          <>
-            <p className="text-sm text-muted">
-              Pay affiliates who saved a PayPal email in one batch from the Payouts page. Create a REST app at developer.paypal.com with Payouts enabled and paste its credentials. The secret is encrypted at rest.
-            </p>
-            {m.stripe?.livemode === false && <div className="mt-3"><Notice>Use sandbox credentials while you test.</Notice></div>}
-            <ActionForm action={connectPayPal} className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_8rem_auto]">
-              <input className="input font-mono text-xs" name="client_id" placeholder="Client ID" required aria-label="Client ID" />
-              <input className="input font-mono text-xs" name="secret" type="password" placeholder="Secret" required aria-label="Secret" />
-              <select className="input" name="mode" defaultValue="sandbox" aria-label="Mode">
-                <option value="sandbox">Sandbox</option>
-                <option value="live">Live</option>
-              </select>
-              <Submit variant="secondary">Connect</Submit>
-            </ActionForm>
-          </>
-        )}
-      </Card>
+      {(m.payouts_available || m.paypal) && (
+        <Card title="Send payouts from Kickrail" actions={m.settings.send_payouts ? <Badge tone="green">on</Badge> : <Badge>off</Badge>}>
+          {m.settings.send_payouts ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <p className="text-muted">The Payouts page can send money: a PayPal batch from your PayPal account{m.plan.limits.stripe_payouts ? ", or Stripe transfers to affiliates who set up Stripe" : ""}.</p>
+              <form action={setSendPayouts.bind(null, false)}><button className="btn btn-secondary">Turn off</button></form>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <p className="text-muted">Off: you pay affiliates yourself and mark them paid here. Turn it on to send PayPal batches{m.plan.limits.stripe_payouts ? " and Stripe transfers" : ""} from the Payouts page.</p>
+              {m.payouts_available && <form action={setSendPayouts.bind(null, true)}><button className="btn btn-primary">Turn on</button></form>}
+            </div>
+          )}
+          {m.paypal ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-sunk/50 p-3 text-sm">
+              <span>PayPal app <span className="font-mono text-xs">{m.paypal.client_id_hint}</span> connected since {date(m.paypal.connected_at)} <Badge tone={m.paypal.mode === "live" ? "green" : "amber"}>{m.paypal.mode}</Badge></span>
+              <form action={disconnectPayPal}><button className="btn btn-danger">Disconnect</button></form>
+            </div>
+          ) : m.settings.send_payouts && (
+            <div className="mt-4 border-t border-line pt-4">
+              <p className="text-sm text-muted">
+                Connect PayPal to pay affiliates who saved a PayPal email in one batch. Create a REST app at developer.paypal.com with Payouts enabled and paste its credentials. The secret is encrypted at rest.
+              </p>
+              {m.stripe?.livemode === false && <div className="mt-3"><Notice>Use sandbox credentials while you test.</Notice></div>}
+              <ActionForm action={connectPayPal} className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_8rem_auto]">
+                <input className="input font-mono text-xs" name="client_id" placeholder="Client ID" required aria-label="Client ID" />
+                <input className="input font-mono text-xs" name="secret" type="password" placeholder="Secret" required aria-label="Secret" />
+                <select className="input" name="mode" defaultValue="sandbox" aria-label="Mode">
+                  <option value="sandbox">Sandbox</option>
+                  <option value="live">Live</option>
+                </select>
+                <Submit variant="secondary">Connect</Submit>
+              </ActionForm>
+            </div>
+          )}
+        </Card>
+      )}
 
       <Card title="Import from Rewardful">
         <RewardfulImport initial={imp.import} />

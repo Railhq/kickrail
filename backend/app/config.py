@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     # connecting a merchant skips that and trusts this secret instead. Use the one
     # `stripe listen --forward-to localhost:3100/api/webhooks/stripe/<merchant_id>` prints.
     dev_webhook_secret: str = ""
+    # Sending money from Kickrail: Stripe Connect transfers and PayPal Payouts batches.
+    # Off: programs only record payouts they made themselves. On, each program still opts
+    # in under Settings (settings.send_payouts).
+    payouts: bool = False
+    # Countries affiliates can open a Stripe payout account in. Stripe only lets a platform
+    # create accounts in its own region (a Canadian platform: US and CA).
+    connect_countries: str = "US,CA"
     # Fee added on top of a funded payout batch, in basis points (0 for own use).
     payout_fee_bps: int = 0
     # Outgoing mail. With no SMTP host, emails are kept in the outbox as "logged"
@@ -96,8 +103,12 @@ class Settings(BaseSettings):
 
     @property
     def stripe_payouts(self) -> bool:
-        """Stripe Connect payouts need Kickrail's own platform account."""
-        return bool(self.platform_stripe_secret_key)
+        """Stripe Connect payouts need the payouts flag and Kickrail's own platform account."""
+        return self.payouts and bool(self.platform_stripe_secret_key)
+
+    @property
+    def connect_country_list(self) -> list[str]:
+        return [c.strip().upper() for c in self.connect_countries.split(",") if c.strip()]
 
 
 @lru_cache

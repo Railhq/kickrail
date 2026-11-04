@@ -153,6 +153,11 @@ export async function updateSettings(_: State, f: FormData): Promise<State> {
   return r.error ? { error: r.error } : { ok: "Saved" };
 }
 
+export async function setSendPayouts(on: boolean): Promise<void> {
+  await api("/merchant", { method: "PATCH", body: { send_payouts: on } });
+  revalidatePath("/dashboard", "layout");
+}
+
 export async function saveEmailSettings(_: State, f: FormData): Promise<State> {
   const emails = Object.fromEntries(f.getAll("kinds").map(String).map((k) => [k, f.get(`email_${k}`) === "on"]));
   const r = await attempt(() => api("/merchant", { method: "PATCH", body: { emails } }));

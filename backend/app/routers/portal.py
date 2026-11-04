@@ -12,6 +12,7 @@ from ..crypto import encrypt
 from ..deps import merchant_api_factory, platform_api
 from ..security import client_ip_hash, current_partner, db_dep, public_user
 from ..services.affiliates import AffiliateError, add_link, affiliate_view, create_affiliate, pipeline, program_public
+from ..services import payouts as payout_svc
 from ..services import terms
 from .merchant import out
 
@@ -152,8 +153,20 @@ class OnboardIn(BaseModel):
     country: str = Field(default="US", pattern=r"^[A-Z]{2}$")
 
 
+async def _stripe_offered(db, user: dict) -> bool:
+    """Only when one of their programs actually pays through Stripe."""
+    if not get_settings().stripe_payouts:
+        return False
+    ids = await db.affiliates.distinct("merchant_id", {"user_id": user["_id"]})
+    return any([payout_svc.stripe_on(m) async for m in db.merchants.find({"_id": {"$in": ids}})])
+
+
 @router.post("/payout-account/onboard")
 async def onboard(body: OnboardIn, user=Depends(current_partner), db=Depends(db_dep), platform=Depends(platform_api)):
+    if not await _stripe_offered(db, user):
+        raise HTTPException(403, "none of your programs pays through Stripe")
+    if body.country not in get_settings().connect_country_list:
+        raise HTTPException(422, "Stripe payouts aren't available in that country; save a PayPal email or other details instead")
     acct = user.get("connect_account_id")
     if not acct:
         acct = await platform.create_express_account(user["email"], user["_id"], body.country)
@@ -169,9 +182,14 @@ class PayoutDetailsIn(BaseModel):
 
 
 @router.get("/payout-account")
-async def payout_account(user=Depends(current_partner)):
+async def payout_account(user=Depends(current_partner), db=Depends(db_dep)):
     """Saved state only, no Stripe call: works when Stripe payouts aren't configured."""
-    return {"details": user.get("payout_details"), "connected": bool(user.get("connect_account_id")), "payouts_enabled": bool(user.get("payouts_enabled")), "stripe_payouts": get_settings().stripe_payouts}
+    return {
+        "details": user.get("payout_details"), "connected": bool(user.get("connect_account_id")), "payouts_enabled": bool(user.get("payouts_enabled")),
+        # A connected account stays reachable even if its programs stop paying through Stripe.
+        "stripe_payouts": await _stripe_offered(db, user) or bool(user.get("connect_account_id")) and get_settings().stripe_payouts,
+        "connect_countries": get_settings().connect_country_list,
+    }
 
 
 @router.put("/payout-account/details")

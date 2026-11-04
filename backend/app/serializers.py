@@ -140,7 +140,7 @@ def payout_obj(p: dict) -> dict:
         "fee_cents": p.get("fee_cents", 0),
         "reference": p.get("reference"),
         "items": [
-            {"affiliate_id": i["affiliate_id"], "amount_cents": i["amount_cents"], "commission_ids": i["commission_ids"], "status": i.get("status") or ("failed" if i.get("error") else p["status"]), "error": i.get("error")}
+            {"affiliate_id": i["affiliate_id"], "amount_cents": i["amount_cents"], "commission_ids": i["commission_ids"], "status": i.get("status") or ("failed" if i.get("error") else p["status"]), "error": i.get("error"), "paypal_state": i.get("paypal_state")}
             for i in p["items"]
         ],
         "paid_at": p.get("paid_at"),

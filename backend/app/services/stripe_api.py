@@ -157,24 +157,7 @@ class MerchantStripe:
 
 
 class PlatformApi(Protocol):
-    async def create_express_account(self, email: str, user_id: str, country: str) -> str:
-        # Accounts v2: new Connect platforms can't create v1 `type=express` accounts.
-        # Stripe won't grant transfers without card_payments, so request both.
-        acct = await self.c.v2.core.accounts.create_async(
-            {
-                "contact_email": email,
-                "identity": {"country": country.lower(), "entity_type": "individual"},
-                "dashboard": "express",
-                "defaults": {"responsibilities": {"fees_collector": "application", "losses_collector": "application"}},
-                "configuration": {
-                    "merchant": {"capabilities": {"card_payments": {"requested": True}}},
-                    "recipient": {"capabilities": {"stripe_balance": {"stripe_transfers": {"requested": True}}}},
-                },
-                "metadata": {"kr_user": user_id},
-            }
-        )
-        return acct.id
-
+    async def create_express_account(self, email: str, user_id: str, country: str) -> str: ...
     async def onboarding_link(self, account_id: str, refresh_url: str, return_url: str) -> str: ...
     async def dashboard_link(self, account_id: str) -> str: ...
     async def payout_status(self, account_id: str) -> str: ...
@@ -196,7 +179,8 @@ class PlatformStripe:
                 "type": "express",
                 "country": country,
                 "email": email,
-                "capabilities": {"transfers": {"requested": True}},
+                # Stripe won't grant transfers to a US account without card_payments.
+                "capabilities": {"transfers": {"requested": True}} | ({"card_payments": {"requested": True}} if country == "US" else {}),
                 "business_type": "individual",
                 "metadata": {"kr_user": user_id},
             }
