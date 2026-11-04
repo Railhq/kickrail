@@ -41,7 +41,7 @@ def out(doc: dict | None, *drop: str) -> dict | None:
     return d
 
 
-DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False, "reject_self_referrals": False, "attribution": "first", "display_currency": "usd"}
+DEFAULT_SETTINGS = {"cookie_days": 60, "param_names": ["via", "ref"], "auto_approve": True, "affiliate_links": True, "require_tax_form": False, "reject_self_referrals": False, "attribution": "first", "display_currency": "usd", "send_payouts": False}
 
 
 def plan_summary(m: dict, plan: dict | None = None) -> dict:
@@ -78,6 +78,8 @@ def merchant_out(m: dict) -> dict:
         "cname_target": get_settings().portal_cname_target,
         "stripe": {"account_id": stripe.get("account_id"), "account_name": stripe.get("account_name"), "livemode": stripe["livemode"], "connected_at": stripe["connected_at"], "mode": "oauth" if stripe.get("oauth") else "key"} if stripe else None,
         "stripe_oauth": get_settings().stripe_oauth,
+        # Instance flag: whether this Kickrail can send payouts at all (settings.send_payouts opts in).
+        "payouts_available": get_settings().payouts,
         "paypal": {"client_id_hint": f"{paypal['client_id'][:6]}…", "mode": paypal["mode"], "connected_at": paypal["connected_at"]} if paypal else None,
         "snippet": snippet(m),
     }
@@ -164,6 +166,7 @@ class SettingsIn(BaseModel):
     attribution: Literal["first", "last"] | None = None
     emails: dict[str, bool] | None = None
     display_currency: str | None = None
+    send_payouts: bool | None = None
 
 
 @router.patch("")
@@ -176,6 +179,11 @@ async def update_merchant(body: SettingsIn, m=Depends(current_merchant), db=Depe
     for k in ("cookie_days", "auto_approve", "affiliate_links", "require_tax_form", "reject_self_referrals", "attribution"):
         if getattr(body, k) is not None:
             s[f"settings.{k}"] = getattr(body, k)
+    if body.send_payouts is not None and body.send_payouts != m["settings"].get("send_payouts", False):
+        if body.send_payouts and not get_settings().payouts:
+            raise HTTPException(403, "sending payouts from Kickrail isn't available yet")
+        s["settings.send_payouts"] = body.send_payouts
+        await audit.record(db, m["_id"], "payouts.sending_on" if body.send_payouts else "payouts.sending_off", m["_id"])
     if body.display_currency is not None:
         if body.display_currency.lower() not in fx.DISPLAY_CURRENCIES:
             raise HTTPException(422, f"unsupported display currency: {body.display_currency}")
@@ -1276,7 +1284,7 @@ async def audit_log(target: str | None = None, m=Depends(current_merchant), db=D
 @router.get("/payouts")
 async def list_payouts(m=Depends(current_merchant), db=Depends(db_dep)):
     history = await db.payouts.find({"merchant_id": m["_id"]}).sort("created_at", -1).limit(100).to_list(None)
-    return {"payable": await payout_svc.payable(db, m["_id"]), "upcoming": await payout_svc.upcoming(db, m["_id"]), "history": [out(p) for p in history], "fee_bps": get_settings().payout_fee_bps, "paypal_connected": bool(m.get("paypal")), "stripe_payouts": get_settings().stripe_payouts}
+    return {"payable": await payout_svc.payable(db, m["_id"]), "upcoming": await payout_svc.upcoming(db, m["_id"]), "history": [out(p) for p in history], "fee_bps": get_settings().payout_fee_bps, "paypal_connected": bool(m.get("paypal")), "send_payouts": payout_svc.sending_on(m), "stripe_payouts": payout_svc.stripe_on(m)}
 
 
 class PayoutIn(BaseModel):
@@ -1291,6 +1299,8 @@ class PayoutIn(BaseModel):
 async def create_payout(body: PayoutIn, m=Depends(current_merchant), db=Depends(db_dep), paypal=Depends(paypal_factory)):
     if body.method == "stripe":
         plans.require(m, "stripe_payouts")
+    if body.method != "manual" and not payout_svc.sending_on(m):
+        raise HTTPException(403, "sending payouts from Kickrail is off for this program; turn it on under Settings")
     platform = platform_api() if body.method == "stripe" else None
     if body.method == "paypal" and not m.get("paypal"):
         raise HTTPException(400, "connect PayPal first")
@@ -1348,6 +1358,8 @@ class PayPalIn(BaseModel):
 
 @router.put("/paypal")
 async def connect_paypal(body: PayPalIn, m=Depends(current_merchant), db=Depends(db_dep), make=Depends(paypal_key_client)):
+    if not payout_svc.sending_on(m):
+        raise HTTPException(403, "turn on sending payouts from Kickrail first")
     try:
         await make(body.client_id.strip(), body.secret.strip(), body.mode).verify()
     except Exception as e:

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.config import get_settings
 from app.db import get_db
 
 from .conftest import send_event
@@ -223,7 +224,19 @@ async def test_refund_after_payout_claws_back_and_nets(client, db):
     assert p["payable"][0]["payouts_enabled"] is False
 
 
-async def test_stripe_payout_via_connect(client, db, fakes):
+async def test_stripe_payout_via_connect(client, db, fakes, monkeypatch):
+    # Tests run without a platform key; the fake platform stands in for it.
+    monkeypatch.setattr(type(get_settings()), "stripe_payouts", property(lambda s: s.payouts))
+    # Off until the program opts in: no Stripe option for its affiliates, no Stripe batch.
+    assert (await client.get("/payout-account", headers=auth(S["aff"]))).json()["stripe_payouts"] is False
+    assert (await client.post("/payout-account/onboard", json={"country": "US"}, headers=auth(S["aff"]))).status_code == 403
+    assert (await client.post("/merchant/payouts", json={"currency": "usd", "method": "stripe"}, headers=auth(S["owner"]))).status_code == 403
+    assert (await client.patch("/merchant", json={"send_payouts": True}, headers=auth(S["owner"]))).json()["settings"]["send_payouts"] is True
+    acct = (await client.get("/payout-account", headers=auth(S["aff"]))).json()
+    assert acct["stripe_payouts"] is True and acct["connect_countries"] == ["US", "CA"]
+    # Stripe can't open accounts outside the platform's region.
+    assert (await client.post("/payout-account/onboard", json={"country": "IN"}, headers=auth(S["aff"]))).status_code == 422
+
     r = await client.post("/payout-account/onboard", json={"country": "US"}, headers=auth(S["aff"]))
     assert r.json()["url"] == "https://connect.stripe.test/acct_aff1"
     assert (await client.post("/merchant/payouts", json={"currency": "usd", "method": "stripe"}, headers=auth(S["owner"]))).status_code == 400

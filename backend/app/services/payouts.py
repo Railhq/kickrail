@@ -28,6 +28,7 @@ from functools import partial
 
 from pymongo.asynchronous.database import AsyncDatabase
 
+from .. import plans
 from ..config import get_settings
 from ..db import run_in_transaction
 from ..domain.commission import payable_lines
@@ -38,6 +39,16 @@ from .paypal import DONE_FAILED, DONE_OK
 from .stripe_api import PlatformApi
 
 log = logging.getLogger(__name__)
+
+
+def sending_on(merchant: dict) -> bool:
+    """Whether this program sends money from Kickrail (Stripe or PayPal), not just records it.
+    Needs the instance flag and the program's own opt-in; both are off by default."""
+    return get_settings().payouts and bool((merchant.get("settings") or {}).get("send_payouts"))
+
+
+def stripe_on(merchant: dict) -> bool:
+    return sending_on(merchant) and get_settings().stripe_payouts and plans.current(merchant)["stripe_payouts"]
 
 
 def paypal_email(details: dict | None) -> str | None:

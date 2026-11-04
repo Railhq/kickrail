@@ -20,6 +20,7 @@ os.environ.update(
     KR_STRIPE_PORTAL_CONFIGURATION="",
     KR_DEV_WEBHOOK_SECRET="",
     KR_DISPATCHER="false",
+    KR_PAYOUTS="true",
     # Never inherit the real mail setup from .env.
     KR_BREVO_API_KEY="",
     KR_SMTP_HOST="",

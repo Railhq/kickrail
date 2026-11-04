@@ -8,7 +8,7 @@ export type Merchant = {
   public_key: string;
   secret_key_hint: string;
   owner_id: string;
-  settings: { cookie_days: number; param_names: string[]; auto_approve: boolean; affiliate_links: boolean; require_tax_form: boolean; reject_self_referrals: boolean; attribution: "first" | "last"; display_currency: string; emails: Record<string, boolean> };
+  settings: { cookie_days: number; param_names: string[]; auto_approve: boolean; affiliate_links: boolean; require_tax_form: boolean; reject_self_referrals: boolean; attribution: "first" | "last"; display_currency: string; send_payouts: boolean; emails: Record<string, boolean> };
   branding: Branding;
   terms: Terms | null;
   portal_domains: PortalDomain[];
@@ -19,6 +19,7 @@ export type Merchant = {
   cname_target: string;
   stripe: { account_id: string; account_name: string; livemode: boolean; connected_at: string; mode: "oauth" | "key" } | null;
   stripe_oauth: boolean;
+  payouts_available: boolean;
   paypal: { client_id_hint: string; mode: "sandbox" | "live"; connected_at: string } | null;
   snippet: string;
 };
@@ -250,7 +251,7 @@ export type Payout = {
   status: string;
   total_cents: number;
   fee_cents: number;
-  items: { affiliate_id: string; amount_cents: number; transfer_id?: string; error?: string; status?: string }[];
+  items: { affiliate_id: string; amount_cents: number; transfer_id?: string; error?: string; status?: string; paypal_state?: string }[];
   funding_url?: string;
   reference?: string;
   created_at: string;
