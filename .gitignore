@@ -19,3 +19,6 @@ npm-debug.log*
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# prune_orphans.py backups (real emails)
+backend/scripts/prune-backup-*.json

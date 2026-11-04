@@ -33,7 +33,7 @@ from ..config import get_settings
 from ..ids import new_id
 from ..railhq import Railhq, RailhqError
 from ..security import SESSION_DAYS, current_user, db_dep, issue_token, public_user
-from ..services import pass_coverage
+from ..services import operators, pass_coverage
 from ..services.pass_coverage import set_pass, workspaces_from
 
 log = logging.getLogger("kickrail.railhq")
@@ -187,6 +187,9 @@ async def events(request: Request, db=Depends(db_dep)):
         await link(db, fresh)
         await db.users.update_one({"_id": user["_id"]}, {"$set": {"name": fresh.get("name") or user.get("name", "")}})
     elif e["type"] == "user.deleted":
+        if await operators.remove_if_empty(db, user):
+            log.info("railhq account deleted: removed operator %s, who had no programs", user["_id"])
+            return {"ok": True}
         # Programs stay; the person signs in with a new Railhq account to reach them.
         await db.users.update_one({"_id": user["_id"]}, {"$unset": {"railhq_id": ""}, "$set": {"signed_out_at": _later()}})
         await set_pass(db, user["_id"], False)
