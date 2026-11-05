@@ -91,7 +91,7 @@ async def signup(body: SignupIn, request: Request, db=Depends(db_dep)):
             raise HTTPException(409, "an account with that email already exists. Sign in, or reset your password")
         # The Railhq account holds the password and sends the confirmation email.
         try:
-            got = await railhq.client().signup(email, body.password, body.name.strip(), client_ip(request), body.pow)
+            got = await railhq.client().signup(email, body.password, body.name.strip(), client_ip(request), body.pow, user_agent=request.headers.get("user-agent", ""), page=request.headers.get("referer", ""))
         except RailhqError as e:
             if e.code == "pow":
                 raise HTTPException(400, POW)
