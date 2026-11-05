@@ -129,9 +129,10 @@ class Railhq:
 
     # ---------- server to server ----------
 
-    async def signup(self, email: str, password: str, name: str = "", ip: str = "", pow: str = "") -> dict:
-        """`pow`: the proof-of-work answer the person's browser sent with the form (pow_url)."""
-        return await self._call("POST", "/api/signup", json={"email": email, "password": password, "name": name, "ip": ip, "pow": pow})
+    async def signup(self, email: str, password: str, name: str = "", ip: str = "", pow: str = "", user_agent: str = "", page: str = "") -> dict:
+        """`pow`: the proof-of-work answer the person's browser sent with the form (pow_url).
+        `user_agent` and `page` (the Referer, our sign-up page) let Railhq trace new accounts."""
+        return await self._call("POST", "/api/signup", json={"email": email, "password": password, "name": name, "ip": ip, "pow": pow, "user_agent": user_agent, "page": page})
 
     async def login(self, email: str, password: str, ip: str = "") -> dict:
         return await self._call("POST", "/api/login", json={"email": email, "password": password, "ip": ip})
