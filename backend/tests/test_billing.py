@@ -378,7 +378,7 @@ async def test_checkout_session_params(monkeypatch):
     assert "managed_payments" not in s
     assert s["metadata"] == {"kr_merchant": "mer_1", "product": "kickrail"}
     assert s["subscription_data"] == {"metadata": {"kr_merchant": "mer_1", "product": "kickrail"}, "trial_end": 1_900_000_000}
-    assert s["branding_settings"] == {"display_name": "Kickrail", "logo": {"type": "url", "url": "https://kickrail.test/icon-512.png"}}
+    assert s["branding_settings"] == {"display_name": "Kickrail", "button_color": "#0f5e4b", "logo": {"type": "url", "url": "https://kickrail.test/icon-512.png"}}
     assert s["customer_email"] == "o@x.example" and "customer" not in s
 
     (s,) = await checkout_params(monkeypatch, managed=True, customer="cus_1")
