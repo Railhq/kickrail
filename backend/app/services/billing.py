@@ -152,7 +152,7 @@ def managed_payments_params(params: dict) -> dict:
 
 def branding() -> dict:
     """The name (and logo, when served over https) on the Checkout page, whoever owns the account."""
-    b: dict = {"display_name": BRAND}
+    b: dict = {"display_name": BRAND, "button_color": "#0f5e4b"}
     base = get_settings().public_url.rstrip("/")
     if base.startswith("https://"):
         b["logo"] = {"type": "url", "url": f"{base}/icon-512.png"}
