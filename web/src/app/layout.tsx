@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Instrument_Serif } from "next/font/google";
 import { PathrailTag } from "@/components/Pathrail";
 import "./globals.css";
+import HelprailWidget from "@/components/HelprailWidget";
 
 const PATHRAIL_SITE = process.env.NEXT_PUBLIC_PATHRAIL_SITE || "pr_W8KFAzDx3WV0Htta";
 
@@ -20,7 +21,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <head>
         <PathrailTag site={PATHRAIL_SITE} host="kickrail.com" skip="^/(a|join|view-as)(/|$)" />
       </head>
-      <body className={`${sans.variable} ${mono.variable} ${display.variable} font-sans antialiased`}>{children}</body>
+      <body className={`${sans.variable} ${mono.variable} ${display.variable} font-sans antialiased`}>{children}
+        <HelprailWidget skip={["^/a/", "^/a$", "^/join(/|$)", "^/view-as/"]} hosts={["kickrail.com", "www.kickrail.com", "localhost"]} />
+      </body>
     </html>
   );
 }
