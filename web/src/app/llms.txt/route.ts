@@ -2,10 +2,28 @@ import { DOCS_NAV, SITE } from "../docs/nav";
 import { PLANS, planFeatures } from "@/lib/plans";
 
 // https://llmstxt.org: a plain summary for AI assistants answering questions about Kickrail.
-export const dynamic = "force-static";
+export const revalidate = 3600;
 
-export function GET() {
-  const docs = DOCS_NAV.map((g) => `## ${g.group}\n\n${g.items.map(([href, label]) => `- [${label}](${SITE}${href})`).join("\n")}`).join("\n\n");
+const CONTENT_ORIGIN = process.env.CONTENT_ORIGIN ?? "http://159.203.71.192:3004";
+
+type NavGroup = { group: string; items: [string, string][] };
+
+// The docs are edited in railhq-content, so its nav is the live list. The copy in
+// docs/nav.ts is the fallback if the content server can't be reached.
+async function docsNav(): Promise<NavGroup[]> {
+  try {
+    const res = await fetch(`${CONTENT_ORIGIN}/kickrail/docs/index.json`, { next: { revalidate: 3600 }, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(String(res.status));
+    const groups = (await res.json()) as { group: string; items: { label: string; href: string }[] }[];
+    if (!groups.length) throw new Error("empty");
+    return groups.map((g) => ({ group: g.group, items: g.items.map((i) => [i.href, i.label] as [string, string]) }));
+  } catch {
+    return DOCS_NAV;
+  }
+}
+
+export async function GET() {
+  const docs = (await docsNav()).map((g) => `## ${g.group}\n\n${g.items.map(([href, label]) => `- [${label}](${SITE}${href})`).join("\n")}`).join("\n\n");
   const plans = PLANS.map((p) => `- ${p.name}: ${p.month ? `$${p.month}/month` : "free"}. ${planFeatures(p).join("; ")}.`).join("\n");
   const body = `# Kickrail
 

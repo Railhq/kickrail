@@ -1,8 +1,10 @@
 import type { NextConfig } from "next";
 
-// The blog is its own app (Railhq/kickrail-content) on the content droplet, built
-// with basePath /blog. Read at build time, so changing it needs a rebuild.
-const BLOG_ORIGIN = process.env.BLOG_ORIGIN ?? "http://159.203.71.192:3002";
+// The blog and most of the docs live in Railhq/railhq-content, one container on
+// the content droplet that serves every Railhq app under /<app>/... Its scripts
+// and styles are reached through /_railhq-content so they never collide with
+// this app's own /_next files. Read at build time, so changing it needs a rebuild.
+const CONTENT_ORIGIN = process.env.CONTENT_ORIGIN ?? "http://159.203.71.192:3004";
 
 const nextConfig: NextConfig = {
   // Self-contained server for the Docker image.
@@ -22,10 +24,18 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // These run after this app's own pages, so a docs page that still lives here
+  // (docs/plans, rendered from the billing code) wins over the proxy.
   async rewrites() {
     return [
-      { source: "/blog", destination: `${BLOG_ORIGIN}/blog` },
-      { source: "/blog/:path*", destination: `${BLOG_ORIGIN}/blog/:path*` },
+      // The Tina editor for every Railhq app's content.
+      { source: "/blog/admin", destination: `${CONTENT_ORIGIN}/admin/index.html` },
+      { source: "/blog/admin/:path*", destination: `${CONTENT_ORIGIN}/admin/:path*` },
+      { source: "/blog", destination: `${CONTENT_ORIGIN}/kickrail/blog` },
+      { source: "/blog/:path*", destination: `${CONTENT_ORIGIN}/kickrail/blog/:path*` },
+      { source: "/docs", destination: `${CONTENT_ORIGIN}/kickrail/docs` },
+      { source: "/docs/:path*", destination: `${CONTENT_ORIGIN}/kickrail/docs/:path*` },
+      { source: "/_railhq-content/:path*", destination: `${CONTENT_ORIGIN}/:path*` },
     ];
   },
 };
