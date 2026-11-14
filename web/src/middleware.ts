@@ -63,7 +63,7 @@ export async function middleware(req: NextRequest) {
   if (!slug) return next();
   // Pages on a portal domain are the affiliate side, branded as the program.
   headers.set("x-kickrail-portal-slug", slug);
-  // Kickrail's blog is proxied in next.config; it doesn't belong on a merchant's domain.
+  // Kickrail's blog is proxied to railhq-content in next.config; it doesn't belong on a merchant's domain.
   if (pathname === "/blog" || pathname.startsWith("/blog/")) return new NextResponse("Not found", { status: 404 });
   // The merchant dashboard stays on Kickrail's own domain.
   if (pathname === "/" || pathname === "/join" || pathname.startsWith("/dashboard") || pathname.startsWith("/onboarding") || pathname.startsWith("/view-as")) {
